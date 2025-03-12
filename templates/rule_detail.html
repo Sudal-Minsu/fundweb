@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ rule.name }} 상세 정보</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="detail-container">
+        <h1>{{ rule.name }} 상세 정보</h1>
+        <p>
+            수익금: <span class="{% if rule.profit > 0 %}profit-positive{% else %}profit-negative{% endif %}">
+                ${{ rule.profit }}
+            </span>
+        </p>
+        <p>
+            수익률: <span class="{% if rule.yield > 0 %}profit-positive{% else %}profit-negative{% endif %}">
+                {{ rule.yield }}%
+            </span>
+        </p>
+        <p>이곳은 {{ rule.name }}에 대한 상세 분석, 투자 전략, 관련 뉴스 등 다양한 정보를 추가로 표시할 수 있는 영역입니다.</p>
+    </div>
+</body>
+</html>
