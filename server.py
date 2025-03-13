@@ -20,6 +20,8 @@ def rule_detail(rule_id):
     rule = next((r for r in rules if r['id'] == rule_id), None)
     return render_template('rule_detail.html', rule=rule)
 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000)) 
+    app.run(host="0.0.0.0", port=port)
 
-app.run(debug=True)
 
