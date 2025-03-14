@@ -21,3 +21,5 @@ for row in news_data:
 # 6️⃣ MySQL 연결 종료
 cursor.close()
 conn.close()
+
+print(news_data)
