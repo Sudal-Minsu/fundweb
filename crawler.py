@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup
 import json
 from datetime import datetime
 
-today = datetime.now().strftime('%Y-%m-%d')
+#today = datetime.now().strftime('%Y-%m-%d')
+today = "2025-03-11"
 
 NAVER_FINANCE_NEWS_URL = f"https://finance.naver.com/news/mainnews.naver?date={today}"
 
@@ -24,20 +25,18 @@ def get_stock_news():
 
     for article in articles:
         title_tag = article.select_one("dl > dd > a")  # 뉴스 제목 태그
-        summary_tag = article.select_one("dl > dd")  # 뉴스 요약 태그
+        
         date_tag = article.select_one("span.wdate")  # 날짜 태그
 
         if title_tag and date_tag:
             title = title_tag.text.strip()
-            url = title_tag["href"] 
-            summary = summary_tag.text.strip() if summary_tag else "요약 없음"
+            
+            
             published_date = date_tag.text.strip()
 
             news_list.append({
                 "title": title,
-                "url": url,
-                "summary": summary,
-                "published_date": published_date,
+                "published_date": published_date
             })
 
     return news_list
