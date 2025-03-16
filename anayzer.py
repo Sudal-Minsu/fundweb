@@ -22,5 +22,4 @@ for row in news_data:
 cursor.close()
 conn.close()
 
-# 출력
 print(news_data)
