@@ -3,8 +3,8 @@ from bs4 import BeautifulSoup
 import json
 from datetime import datetime
 
-today = datetime.now().strftime('%Y-%m-%d')
-# today = "2025-03-12"
+# today = datetime.now().strftime('%Y-%m-%d')
+today = "2025-03-16"
 
 NAVER_FINANCE_NEWS_URL = f"https://finance.naver.com/news/mainnews.naver?date={today}"
 
