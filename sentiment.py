@@ -1,4 +1,4 @@
-# MySQL에 ALTER TABLE news ADD COLUMN sentiment_score FLOAT DEFAULT NULL; 
+# MySQL 커맨드에 ALTER TABLE news ADD COLUMN sentiment_score FLOAT DEFAULT NULL; 
 import pymysql
 import torch
 import torch.nn.functional as F
