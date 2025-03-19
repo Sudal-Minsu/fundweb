@@ -5,6 +5,7 @@ import random
 import time
 from datetime import datetime
 import matplotlib.pyplot as plt
+import config
 
 # 🔹 거래 내역 MySQL 저장 함수
 def save_to_db(db_config, trade_table_name, stock_code, order_type, quantity, price, trade_time, profit=None, profit_rate=None):
@@ -90,8 +91,8 @@ def random_trade(url_base, access_token, app_key, app_secret, db_config, trade_t
     url = f"{url_base}/{path}"
     
     data = {
-        "CANO": "50124996",  
-        "ACNT_PRDT_CD": "01",  
+        "CANO": config.ACCOUNT_INFO["CANO"],  
+        "ACNT_PRDT_CD": config.ACCOUNT_INFO["ACNT_PRDT_CD"],  
         "PDNO": stock_code,  
         "ORD_DVSN": "01",  
         "ORD_QTY": str(quantity),  
