@@ -1,5 +1,4 @@
-
-"""
+"""ARIMA 모델 단일 예측"""
 
 import yfinance as yf
 import pandas as pd
