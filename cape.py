@@ -1,5 +1,4 @@
-cape 지수 계산
-"""
+"""cape 지수 계산"""
 
 import yfinance as yf
 import pandas as pd
