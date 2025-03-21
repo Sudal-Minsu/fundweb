@@ -2,23 +2,71 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>{{ rule.name }} 상세 정보</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta http-equiv="refresh" content="10"> <!-- 🔄 10초마다 자동 새로고침 -->
+    <title>{{ rule.name }} - 상세정보</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="detail-container">
-        <h1>{{ rule.name }} 상세 정보</h1>
-        <p>
-            수익금: <span class="{% if rule.profit > 0 %}profit-positive{% else %}profit-negative{% endif %}">
-                ${{ rule.profit }}
-            </span>
-        </p>
-        <p>
-            수익률: <span class="{% if rule.yield > 0 %}profit-positive{% else %}profit-negative{% endif %}">
-                {{ rule.yield }}%
-            </span>
-        </p>
-        <p>이곳은 {{ rule.name }}에 대한 상세 분석, 투자 전략, 관련 뉴스 등 다양한 정보를 추가로 표시할 수 있는 영역입니다.</p>
-    </div>
+    <h1>{{ rule.name }} 상세정보</h1>
+    <p><strong>총 수익금:</strong> {{ rule.profit }} 원</p>
+    <p><strong>평균 수익률:</strong> {{ rule.yield }} %</p>
+
+    {% if profit_data %}
+    <h2>📈 수익금 그래프</h2>
+    <canvas id="profitChart"></canvas>
+
+    <h2>📉 수익률 그래프</h2>
+    <canvas id="yieldChart"></canvas>
+
+    <script>
+        const labels = {{ labels | tojson }};
+        const profitData = {{ profit_data | tojson }};
+        const yieldData = {{ yield_data | tojson }};
+
+        // 기존 차트가 있으면 삭제 (새로고침 시 충돌 방지)
+        if (Chart.getChart("profitChart")) {
+            Chart.getChart("profitChart").destroy();
+        }
+        if (Chart.getChart("yieldChart")) {
+            Chart.getChart("yieldChart").destroy();
+        }
+
+        // 수익금 그래프
+        new Chart(document.getElementById('profitChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '수익금 (₩)',
+                    data: profitData,
+                    borderColor: 'blue',
+                    backgroundColor: 'rgba(0, 0, 255, 0.1)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            }
+        });
+
+        // 수익률 그래프
+        new Chart(document.getElementById('yieldChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '수익률 (%)',
+                    data: yieldData,
+                    borderColor: 'red',
+                    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            }
+        });
+    </script>
+    {% else %}
+        <p>📉 거래 기록이 없습니다.</p>
+    {% endif %}
+
+    <p><a href="/">← 돌아가기</a></p>
 </body>
 </html>
