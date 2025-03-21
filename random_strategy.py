@@ -7,6 +7,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import config
 
+
 # 🔹 거래 내역 MySQL 저장 함수
 def save_to_db(db_config, trade_table_name, stock_code, order_type, quantity, price, trade_time, profit=None, profit_rate=None):
     try:
@@ -40,6 +41,7 @@ def save_to_db(db_config, trade_table_name, stock_code, order_type, quantity, pr
     except Exception as e:
         print(f"❌ MySQL 저장 오류: {e}")
 
+
 # 🔹 해시키 생성 함수
 def get_hashkey(url_base, app_key, app_secret, data):
     path = "uapi/hashkey"
@@ -53,6 +55,7 @@ def get_hashkey(url_base, app_key, app_secret, data):
     
     res = requests.post(url, headers=headers, data=json.dumps(data))
     return res.json().get("HASH", "")
+
 
 # 🔹 현재 주가 조회 함수
 def get_current_price(url_base, access_token, app_key, app_secret, stock_code):
@@ -75,6 +78,8 @@ def get_current_price(url_base, access_token, app_key, app_secret, stock_code):
         return None
     
     return int(res.json()['output']['stck_prpr'])
+
+
 
 # 🔹 랜덤 매매 함수 (하나의 거래 실행)
 def random_trade(url_base, access_token, app_key, app_secret, db_config, trade_table_name, trade_history, profit_log, profit_rate_log):
@@ -138,6 +143,8 @@ def random_trade(url_base, access_token, app_key, app_secret, db_config, trade_t
     else:
         print(f"⚠️ 주문 실패: {res.json()}")
 
+
+
 # 🔹 수익률 그래프 함수
 def plot_profit(profit_log, profit_rate_log):
     plt.clf()
@@ -159,6 +166,7 @@ def plot_profit(profit_log, profit_rate_log):
 
     plt.tight_layout()
     plt.pause(0.1)
+
 
 # 🔹 랜덤 자동매매 실행 함수
 def run_random_trading(url_base, access_token, app_key, app_secret, db_config, trade_table_name):
