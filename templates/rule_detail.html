@@ -2,71 +2,66 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="10"> <!-- 🔄 10초마다 자동 새로고침 -->
-    <title>{{ rule.name }} - 상세정보</title>
+    <title>{{ rule.name }} - 상세보기</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        canvas { margin: 40px 0; }
+    </style>
 </head>
 <body>
-    <h1>{{ rule.name }} 상세정보</h1>
+    <h1>{{ rule.name }} 상세 정보</h1>
     <p><strong>총 수익금:</strong> {{ rule.profit }} 원</p>
     <p><strong>평균 수익률:</strong> {{ rule.yield }} %</p>
 
     {% if profit_data %}
-    <h2>📈 수익금 그래프</h2>
-    <canvas id="profitChart"></canvas>
+        <h2>📈 수익금 추이</h2>
+        <canvas id="profitChart"></canvas>
 
-    <h2>📉 수익률 그래프</h2>
-    <canvas id="yieldChart"></canvas>
+        <h2>📉 수익률 추이</h2>
+        <canvas id="yieldChart"></canvas>
 
-    <script>
-        const labels = {{ labels | tojson }};
-        const profitData = {{ profit_data | tojson }};
-        const yieldData = {{ yield_data | tojson }};
+        <script>
+            const labels = {{ labels|tojson }};
+            const profitData = {{ profit_data|tojson }};
+            const yieldData = {{ yield_data|tojson }};
 
-        // 기존 차트가 있으면 삭제 (새로고침 시 충돌 방지)
-        if (Chart.getChart("profitChart")) {
-            Chart.getChart("profitChart").destroy();
-        }
-        if (Chart.getChart("yieldChart")) {
-            Chart.getChart("yieldChart").destroy();
-        }
+            const profitCtx = document.getElementById('profitChart').getContext('2d');
+            new Chart(profitCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '수익금 (₩)',
+                        data: profitData,
+                        borderColor: 'blue',
+                        backgroundColor: 'rgba(0, 0, 255, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                }
+            });
 
-        // 수익금 그래프
-        new Chart(document.getElementById('profitChart'), {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: '수익금 (₩)',
-                    data: profitData,
-                    borderColor: 'blue',
-                    backgroundColor: 'rgba(0, 0, 255, 0.1)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            }
-        });
-
-        // 수익률 그래프
-        new Chart(document.getElementById('yieldChart'), {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: '수익률 (%)',
-                    data: yieldData,
-                    borderColor: 'red',
-                    backgroundColor: 'rgba(255, 0, 0, 0.1)',
-                    fill: true,
-                    tension: 0.3
-                }]
-            }
-        });
-    </script>
+            const yieldCtx = document.getElementById('yieldChart').getContext('2d');
+            new Chart(yieldCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '수익률 (%)',
+                        data: yieldData,
+                        borderColor: 'red',
+                        backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                }
+            });
+        </script>
     {% else %}
-        <p>📉 거래 기록이 없습니다.</p>
+        <p>📉 수익 데이터가 없습니다.</p>
     {% endif %}
 
-    <p><a href="/">← 돌아가기</a></p>
+    <p><a href="/">← 메인으로 돌아가기</a></p>
 </body>
 </html>

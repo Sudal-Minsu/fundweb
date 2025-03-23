@@ -9,16 +9,6 @@ MODEL_NAME = "snunlp/KR-FinBERT-SC"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
 
-def fetch_all_news_from_mysql():
-    """MySQL에서 모든 뉴스 가져오기 (감성 분석된 것도 다시 분석)"""
-    conn = pymysql.connect(**DB_CONFIG)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, title FROM news;")  # 조건 없이 모든 데이터 가져옴
-    news_data = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return news_data
-
 def fetch_news_from_mysql():
     """MySQL에서 감성 분석이 필요한 뉴스 데이터 가져오기"""
     conn = pymysql.connect(**DB_CONFIG)
