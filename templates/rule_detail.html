@@ -3,22 +3,116 @@
 <head>
     <meta charset="UTF-8">
     <title>{{ rule.name }} 상세 정보</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta http-equiv="refresh" content="300">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+        }
+        .detail-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 30px;
+        }
+        .animated-number {
+            transition: all 0.6s ease-in-out;
+        }
+        .news-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .news-table th, .news-table td {
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .news-table th {
+            background-color: #f0f0f0;
+        }
+        .profit-positive {
+            color: red;
+            font-weight: bold;
+            }
+
+        .profit-negative {
+            color: blue;
+            font-weight: bold;
+            }
+    </style>
 </head>
 <body>
     <div class="detail-container">
         <h1>{{ rule.name }} 상세 정보</h1>
+
         <p>
-            수익금: <span class="{% if rule.profit > 0 %}profit-positive{% else %}profit-negative{% endif %}">
+            수익금: 
+            <span class="animated-number {% if rule.profit > 0 %}profit-positive{% else %}profit-negative{% endif %}" id="profit">
                 ${{ rule.profit }}
             </span>
         </p>
         <p>
-            수익률: <span class="{% if rule.yield > 0 %}profit-positive{% else %}profit-negative{% endif %}">
+            수익률: 
+            <span class="animated-number {% if rule.yield > 0 %}profit-positive{% else %}profit-negative{% endif %}" id="yield">
                 {{ rule.yield }}%
             </span>
         </p>
-        <p>이곳은 {{ rule.name }}에 대한 상세 분석, 투자 전략, 관련 뉴스 등 다양한 정보를 추가로 표시할 수 있는 영역입니다.</p>
+
+        {% if rule.id == 2 %}
+            <hr>
+            <h2>오늘의 뉴스 감성 분석</h2>
+
+            {% if labels %}
+                <canvas id="sentimentChart"></canvas>
+                <script>
+                    const ctx = document.getElementById('sentimentChart').getContext('2d');
+                    const chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: {{ labels | tojson }},
+                            datasets: [{
+                                label: 'Sentiment Score',
+                                data: {{ scores | tojson }},
+                                borderColor: '#28a745',
+                                borderWidth: 2,
+                                fill: false,
+                                tension: 0.2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    min: -1,
+                                    max: 1,
+                                    title: { display: true, text: '감성 점수' }
+                                },
+                                x: {
+                                    title: { display: true, text: '시간' }
+                                }
+                            }
+                        }
+                    });
+                </script>
+
+                <h3>뉴스 목록</h3>
+                <table class="news-table">
+                    <thead>
+                        <tr><th>시간</th><th>제목</th><th style="width:70px">감성 점수</th></tr>
+                    </thead> 
+                    <tbody>
+                        {% for label, title, score in zipped_data %}
+                        <tr>
+                            <td>{{ label }}</td>
+                            <td>{{ title }}</td>
+                            <td>{{ '%.4f'|format(score) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>오늘의 뉴스가 없습니다.</p>
+            {% endif %}
+        {% endif %}
     </div>
 </body>
 </html>

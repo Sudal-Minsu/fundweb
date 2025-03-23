@@ -26,7 +26,7 @@ def analyze_sentiment(text):
         outputs = model(**inputs)
     logits = outputs.logits
     probabilities = F.softmax(logits, dim=1)  # 감성 확률 계산
-    sentiment_score = (probabilities[0][2] - probabilities[0][0]).item()  # 긍정 - 부정
+    sentiment_score = (probabilities[0][2] - probabilities[0][0]).item()  # 긍정 - 부정 더 다양하게.?
     return round(sentiment_score, 4)  # 소수점 4자리 반영
 
 def update_sentiment_in_mysql(analyzed_data):
