@@ -57,7 +57,6 @@ def rule_detail(rule_id):
         return abort(404)
 
     labels, scores, titles = [], [], []
-
     if rule_id == 2:
         try:
             conn = pymysql.connect(**config.DB_CONFIG)
@@ -79,59 +78,18 @@ def rule_detail(rule_id):
         except Exception as e:
             print("뉴스 데이터 조회 오류:", e)
 
-    zipped_data = zip(labels, titles, scores)
+        zipped_data = zip(labels, titles, scores)
 
-    return render_template(
-        'rule_detail.html',
-        rule=rule,
-        rule_id=rule_id,
-        labels=labels,
-        scores=scores,
-        titles=titles,
-        zipped_data=zipped_data
-    )
+        return render_template(
+            'rule_detail.html',
+            rule=rule,
+            rule_id=rule_id,
+            labels=labels,
+            scores=scores,
+            titles=titles,
+            zipped_data=zipped_data
+        )
 
-    if rule_id == 1:
-        try:
-            # 요약 수익 갱신
-            total_profit, average_yield = get_auto_trading_summary()
-            rule['profit'] = total_profit
-            rule['yield'] = average_yield
-
-            conn = pymysql.connect(**config.DB_CONFIG)
-            cursor = conn.cursor()
-            query = """
-                SELECT profit, profit_rate, trade_time
-                FROM trade_history
-                WHERE profit IS NOT NULL
-                ORDER BY trade_time ASC
-                LIMIT 50
-            """
-            cursor.execute(query)
-            results = cursor.fetchall()
-            cursor.close()
-            conn.close()
-
-            profit_list = [float(r[0]) for r in results]
-            yield_list = [float(r[1]) for r in results]
-            labels = [r[2].strftime('%Y-%m-%d %H:%M') for r in results]
-
-            response = make_response(render_template(
-                'rule_detail.html',
-                rule=rule,
-                profit_data=profit_list,
-                yield_data=yield_list,
-                labels=labels
-            ))
-            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-            return response
-
-        except Exception as e:
-            print("📛 거래 데이터 조회 오류:", e)
-            return render_template('rule_detail.html', rule=rule)
-
-    # rule_id != 1일 경우
-    return render_template('rule_detail.html', rule=rule)
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
