@@ -91,6 +91,49 @@ def rule_detail(rule_id):
         zipped_data=zipped_data
     )
 
+    if rule_id == 1:
+        try:
+            # 요약 수익 갱신
+            total_profit, average_yield = get_auto_trading_summary()
+            rule['profit'] = total_profit
+            rule['yield'] = average_yield
+
+            conn = pymysql.connect(**config.DB_CONFIG)
+            cursor = conn.cursor()
+            query = """
+                SELECT profit, profit_rate, trade_time
+                FROM trade_history
+                WHERE profit IS NOT NULL
+                ORDER BY trade_time ASC
+                LIMIT 50
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            profit_list = [float(r[0]) for r in results]
+            yield_list = [float(r[1]) for r in results]
+            labels = [r[2].strftime('%Y-%m-%d %H:%M') for r in results]
+
+            response = make_response(render_template(
+                'rule_detail.html',
+                rule=rule,
+                profit_data=profit_list,
+                yield_data=yield_list,
+                labels=labels
+            ))
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            return response
+
+        except Exception as e:
+            print("📛 거래 데이터 조회 오류:", e)
+            return render_template('rule_detail.html', rule=rule)
+
+    # rule_id != 1일 경우
+    return render_template('rule_detail.html', rule=rule)
+
+# 🔹 Flask 실행
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
