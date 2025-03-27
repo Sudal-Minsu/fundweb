@@ -47,7 +47,7 @@
         <p>
             수익금: 
             <span class="animated-number {% if rule.profit > 0 %}profit-positive{% else %}profit-negative{% endif %}" id="profit">
-                ${{ rule.profit }}
+                ${{ rule.profit }} 
             </span>
         </p>
         <p>
@@ -59,7 +59,14 @@
 
         {% if rule.id == 2 %}
             <hr>
-            <h2>오늘의 뉴스 감성 분석</h2>
+            <h2>
+                오늘의 뉴스 감성 분석
+                {% if update_time %}
+                    <small style="font-size: 0.8em; color: gray;">
+                        (업데이트: {{ update_time.strftime('%H:%M:%S') }})
+                    </small>
+                {% endif %}
+            </h2>
 
             {% if labels %}
                 <canvas id="sentimentChart"></canvas>

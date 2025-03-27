@@ -56,7 +56,9 @@ def rule_detail(rule_id):
     if rule is None:
         return abort(404)
 
+
     labels, scores, titles = [], [], []
+    
     if rule_id == 2:
         try:
             conn = pymysql.connect(**config.DB_CONFIG)
@@ -75,11 +77,12 @@ def rule_detail(rule_id):
             labels = [row[1].strftime('%H:%M') for row in data]
             scores = [row[2] for row in data]
             titles = [row[0] for row in data]
+            update_time = datetime.now()
         except Exception as e:
             print("뉴스 데이터 조회 오류:", e)
 
         zipped_data = zip(labels, titles, scores)
-
+        
         return render_template(
             'rule_detail.html',
             rule=rule,
@@ -87,8 +90,9 @@ def rule_detail(rule_id):
             labels=labels,
             scores=scores,
             titles=titles,
-            zipped_data=zipped_data
-        )
+            zipped_data=zipped_data,
+            update_time=update_time
+          )
 
 
 # 🔹 Flask 실행
