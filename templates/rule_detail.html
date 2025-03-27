@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>{{ rule.name }} 상세 정보</title>
-    <meta http-equiv="refresh" content="310">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
@@ -56,29 +55,48 @@
                 {{ rule.yield }}%
             </span>
         </p>
-
-        {% if rule.id == 2 %}
+        
+        {% if rule_id == 2 %}
             <hr>
             <h2>
                 오늘의 뉴스 감성 분석
-                {% if update_time %}
-                    <small style="font-size: 0.8em; color: gray;">
-                        (업데이트: {{ update_time.strftime('%H:%M:%S') }})
-                    </small>
-                {% endif %}
+                <small id="update-time" style="font-size: 0.8em; color: gray;"></small>
             </h2>
 
-            {% if labels %}
-                <canvas id="sentimentChart"></canvas>
-                <script>
+
+            <canvas id="sentimentChart"></canvas>
+            <h3>뉴스 목록</h3>
+            <table class="news-table" id="news-table">
+                <thead>
+                    <tr><th>시간</th><th>제목</th><th style="width:70px">감성 점수</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+
+            <script>
+                let chart;
+
+                async function fetchNewsAndUpdate() {
+                    const res = await fetch("/api/news");
+                    const data = await res.json();
+
+                    if (!data || !data.labels) return;
+
+                    // ⏰ 업데이트 시간 표시
+                    const now = new Date();
+                    const formatted = now.toLocaleTimeString();
+                    document.getElementById("update-time").textContent = `(업데이트: ${formatted})`;
+
+                    // 🎯 차트 다시 그리기
                     const ctx = document.getElementById('sentimentChart').getContext('2d');
-                    const chart = new Chart(ctx, {
+                    if (chart) chart.destroy();
+                    chart = new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: {{ labels | tojson }},
+                            labels: data.labels,
                             datasets: [{
                                 label: 'Sentiment Score',
-                                data: {{ scores | tojson }},
+                                data: data.scores,
                                 borderColor: '#28a745',
                                 borderWidth: 2,
                                 fill: false,
@@ -99,26 +117,25 @@
                             }
                         }
                     });
-                </script>
 
-                <h3>뉴스 목록</h3>
-                <table class="news-table">
-                    <thead>
-                        <tr><th>시간</th><th>제목</th><th style="width:70px">감성 점수</th></tr>
-                    </thead> 
-                    <tbody>
-                        {% for label, title, score in zipped_data %}
-                        <tr>
-                            <td>{{ label }}</td>
-                            <td>{{ title }}</td>
-                            <td>{{ '%.4f'|format(score) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% else %}
-                <p>오늘의 뉴스가 없습니다.</p>
-            {% endif %}
+                    // 📰 뉴스 테이블 업데이트
+                    const tbody = document.querySelector("#news-table tbody");
+                    tbody.innerHTML = "";
+                    for (let i = 0; i < data.labels.length; i++) {
+                        const row = document.createElement("tr");
+                        row.innerHTML = `
+                            <td>${data.labels[i]}</td>
+                            <td>${data.titles[i]}</td>
+                            <td>${parseFloat(data.scores[i]).toFixed(4)}</td>
+                        `;
+                        tbody.appendChild(row);
+                    }
+                }
+
+                // 최초 실행 & 5분마다 반복
+                fetchNewsAndUpdate();
+                setInterval(fetchNewsAndUpdate, 310000);  // 5분 = 300,000ms
+            </script>
         {% endif %}
     </div>
 </body>

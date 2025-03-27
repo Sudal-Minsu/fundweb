@@ -94,6 +94,33 @@ def rule_detail(rule_id):
             update_time=update_time
           )
 
+@app.route('/api/news')
+def api_news():
+    try:
+        conn = pymysql.connect(**config.DB_CONFIG)
+        cursor = conn.cursor()
+        today = datetime.now().strftime('%Y-%m-%d')
+        cursor.execute("""
+            SELECT title, published_date, sentiment_score
+            FROM news
+            WHERE DATE(published_date) = %s
+            ORDER BY published_date DESC
+        """, (today,))
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        labels = [row[1].strftime('%H:%M') for row in data]
+        scores = [row[2] for row in data]
+        titles = [row[0] for row in data]
+
+        return {
+            "labels": labels,
+            "scores": scores,
+            "titles": titles
+        }
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
