@@ -1,51 +1,35 @@
+# pip install html5lib finance-datareader
+import pymysql
+import datetime
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import time
-import pymysql
 import FinanceDataReader as fdr
-import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
 import config
 
-# 날짜 설정
+# 오늘 날짜 기준
 today = datetime.date.today()
 start_date = today - datetime.timedelta(days=365)
 
-# db 연결 함수
 def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
 
-# 1. 테이블 생성
-def create_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-    create_sql = """
-    CREATE TABLE IF NOT EXISTS top_stock_price (
-        Date DATE NOT NULL,
-        Code VARCHAR(20) NOT NULL,
-        Close FLOAT,
-        PRIMARY KEY (Date, Code)
-    );
-    """
-    cursor.execute(create_sql)
-    conn.commit()
-    cursor.close()
-    conn.close()
-    print("테이블 'top_stock_price' 확인 또는 생성 완료")
-
-# 2. 상위 200개 종목 추출
+# 상위 200개 종목 추출
 def get_top_200_codes():
     def get_stock_data(market_type):
         all_data = []
-        for page in tqdm(range(1, 31), desc=f"{'코스피' if market_type == 0 else '코스닥'} 종목 크롤링"):
+        for page in tqdm(range(1, 50), desc=f"{'코스피' if market_type == 0 else '코스닥'} 종목 크롤링"):
             url = f'https://finance.naver.com/sise/sise_market_sum.naver?sosok={market_type}&page={page}'
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers)
             soup = BeautifulSoup(res.text, 'html.parser')
             table = soup.select_one('table.type_2')
-            df = pd.read_html(str(table))[0]
+            html_str = str(table)
+            df = pd.read_html(StringIO(html_str), flavor="bs4")[0]
             df = df.dropna(how='all')
 
             codes = []
@@ -80,17 +64,15 @@ def get_top_200_codes():
     df['avg_rank'] = (df['ROE_rank'] + df['invPER_rank']) / 2
 
     top_200 = df.sort_values('avg_rank').head(200)
-
-    # 중복 제거
     top_200_codes = list(set(top_200['종목코드'].tolist()))[:200]
     print(f"상위 종목코드 추출 완료 (중복 제거 후 {len(top_200_codes)}개)")
     return top_200_codes
 
-# 3. 단일 종목 처리
 def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
         if df.empty:
+            print(f"[{code}] → FDR 데이터 없음 (저장 스킵)")
             return
 
         df.reset_index(inplace=True)
@@ -103,8 +85,7 @@ def process_stock(code):
         for _, row in df.iterrows():
             date_str = row['Date'].strftime('%Y-%m-%d')
             close_price = row['Close']
-            cursor.execute("DELETE FROM top_stock_price WHERE Code = %s AND Date = %s", (code, date_str))
-            cursor.execute("INSERT INTO top_stock_price (Date, Code, Close) VALUES (%s, %s, %s)",
+            cursor.execute("REPLACE INTO top_stock_price (Date, Code, Close) VALUES (%s, %s, %s)",
                            (date_str, code, close_price))
 
         conn.commit()
@@ -112,13 +93,9 @@ def process_stock(code):
         conn.close()
 
     except Exception as e:
-        print(f"{code} 처리 중 오류: {e}")
+        print(f"[{code}] 처리 중 오류: {e}")
 
-# 4. 메인 실행
 def main():
-    create_table()
-
-    # 오래된 데이터 삭제
     conn = get_connection()
     cursor = conn.cursor()
     cutoff_date = today - datetime.timedelta(days=365)
@@ -128,7 +105,6 @@ def main():
     conn.close()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
 
-    # 상위 200 종목 가져오기
     top_200_codes = get_top_200_codes()
 
     print(f"[처리 시작] 상위 {len(top_200_codes)}개 종목의 데이터 업데이트 중...")
@@ -139,6 +115,13 @@ def main():
 
     print("전체 데이터 저장 완료")
 
-# 실행
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(DISTINCT Code) FROM top_stock_price")
+    count = cursor.fetchone()[0]
+    print(f"실제 저장된 종목 수: {count}개")
+    cursor.close()
+    conn.close()
+
 if __name__ == "__main__":
     main()
