@@ -1,13 +1,5 @@
-# ALTER TABLE news ADD COLUMN sentiment_score FLOAT DEFAULT NULL; 
-
-# CREATE TABLE IF NOT EXISTS avg_sentiment (
-#     date DATE PRIMARY KEY,
-#     avg_sentiment FLOAT
-# );
-
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 import pymysql
 import torch
 import torch.nn.functional as F
@@ -70,7 +62,7 @@ def calculate_daily_avg_sentiment():
     results = cursor.fetchall()
     cursor.close()
     conn.close()
-    return results  # [(date1, avg1), (date2, avg2), ...]
+    return results 
 
 # 5. 일별 평균 감성 점수를 avg_sentiment 테이블에 저장
 def save_daily_avg_to_mysql(daily_averages):
