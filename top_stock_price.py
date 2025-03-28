@@ -13,7 +13,7 @@ import config
 today = datetime.date.today()
 start_date = today - datetime.timedelta(days=365)
 
-# DB 연결 함수
+# db 연결 함수
 def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
 
