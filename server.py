@@ -56,56 +56,71 @@ def rule_detail(rule_id):
     if rule is None:
         return abort(404)
 
-    dates, avg_scores = [], []
-    recent_news = []
 
+    labels, scores, titles = [], [], []
+    
     if rule_id == 2:
         try:
             conn = pymysql.connect(**config.DB_CONFIG)
             cursor = conn.cursor()
-
-            # 1년치 감성 평균
+            today = datetime.now().strftime('%Y-%m-%d')
             cursor.execute("""
-                SELECT date, avg_sentiment
-                FROM avg_sentiment
-                ORDER BY date ASC
-            """)
-            daily_data = cursor.fetchall()
-            dates = [row[0].strftime('%Y-%m-%d') for row in daily_data]
-            avg_scores = [round(row[1], 4) for row in daily_data]
-
-            # 최근 10일 뉴스 제목 + 감성 점수
-            cursor.execute("""
-                SELECT DATE(published_date) AS date, title, sentiment_score
+                SELECT title, published_date, sentiment_score
                 FROM news
-                WHERE title != '0' AND sentiment_score IS NOT NULL
+                WHERE DATE(published_date) = %s
                 ORDER BY published_date DESC
-            """)
-            rows = cursor.fetchall()
-
-            news_by_day = {}
-            for date, title, score in rows:
-                date_str = date.strftime('%Y-%m-%d')
-                if date_str not in news_by_day:
-                    news_by_day[date_str] = []
-                news_by_day[date_str].append((title, round(score, 4)))
-
-            # 상위 10일치만 추림
-            recent_news = list(news_by_day.items())[:10]
-
+            """, (today,))
+            data = cursor.fetchall()
             cursor.close()
             conn.close()
-        except Exception as e:
-            print("감성 그래프/뉴스 데이터 조회 오류:", e)
 
-    return render_template(
-        'rule_detail.html',
-        rule=rule,
-        rule_id=rule_id,
-        dates=dates,
-        avg_scores=avg_scores,
-        recent_news=recent_news
-    )
+            labels = [row[1].strftime('%H:%M') for row in data]
+            scores = [row[2] for row in data]
+            titles = [row[0] for row in data]
+            update_time = datetime.now()
+        except Exception as e:
+            print("뉴스 데이터 조회 오류:", e)
+
+        zipped_data = zip(labels, titles, scores)
+        
+        return render_template(
+            'rule_detail.html',
+            rule=rule,
+            rule_id=rule_id,
+            labels=labels,
+            scores=scores,
+            titles=titles,
+            zipped_data=zipped_data,
+            update_time=update_time
+          )
+
+@app.route('/api/news')
+def api_news():
+    try:
+        conn = pymysql.connect(**config.DB_CONFIG)
+        cursor = conn.cursor()
+        today = datetime.now().strftime('%Y-%m-%d')
+        cursor.execute("""
+            SELECT title, published_date, sentiment_score
+            FROM news
+            WHERE DATE(published_date) = %s
+            ORDER BY published_date DESC
+        """, (today,))
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        labels = [row[1].strftime('%H:%M') for row in data]
+        scores = [row[2] for row in data]
+        titles = [row[0] for row in data]
+
+        return {
+            "labels": labels,
+            "scores": scores,
+            "titles": titles
+        }
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
