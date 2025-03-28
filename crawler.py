@@ -1,23 +1,30 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import pymysql
 from config import DB_CONFIG
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-today = datetime.now().strftime('%Y-%m-%d')
-#today = "2025-03-21"
+# 크롤링 대상 키워드 목록
+KEYWORDS = [
+    "기준금리", "금리 인상", "금리 인하", "한국은행", "통화정책",
+    "경기침체", "경기둔화", "경기전망", "경제성장률", "내수부진",
+    "소비자물가", "물가상승률", "물가안정", "인플레이션", "디플레이션", "스태그플레이션",
+    "정부 정책", "기획재정부", "재정정책", "부양책", "경기부양", "확장재정", "세수 감소", "가계부채",
+    "고용률", "실업률", "민간소비", "가계대출", "실질소득", "체감경기"
+]
 
+today = datetime.now().date()
 BASE_URL = "https://finance.naver.com/news/mainnews.naver"
-MAX_PAGE = 30  # 안전을 위한 최대 페이지 제한
+MAX_PAGE = 30  # 최대 페이지 제한
 
-def get_stock_news(date, page):
-    """특정 날짜 + 페이지의 뉴스 목록 크롤링"""
-    url = f"{BASE_URL}?date={date}&page={page}"
+def get_stock_news(date_str, page):
+    url = f"{BASE_URL}?date={date_str}&page={page}"
     response = requests.get(url)
     response.encoding = "euc-kr"
 
     if response.status_code != 200:
-        print(f"[오류] {page} 페이지 로딩 실패")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -31,7 +38,6 @@ def get_stock_news(date, page):
         if title_tag and date_tag:
             title = title_tag.text.strip()
             published_date = date_tag.text.strip()
-
             news_list.append({
                 "title": title,
                 "published_date": published_date
@@ -39,25 +45,20 @@ def get_stock_news(date, page):
 
     return news_list
 
-
 def is_news_new(conn, news):
-    """DB에 이미 존재하는 뉴스인지 확인"""
     with conn.cursor() as cursor:
         try:
             pub_date = datetime.strptime(news["published_date"], "%Y-%m-%d %H:%M:%S")
         except ValueError:
-            return False  # 날짜 포맷 문제는 무시
+            return False
 
         sql = "SELECT COUNT(*) FROM news WHERE title = %s AND published_date = %s"
         cursor.execute(sql, (news["title"], pub_date))
         result = cursor.fetchone()
         return result[0] == 0
 
-
 def save_news_to_mysql(conn, news_list):
-    """뉴스 리스트를 MySQL에 저장"""
     if not news_list:
-        print("저장할 뉴스가 없습니다.")
         return
 
     cursor = conn.cursor()
@@ -66,46 +67,81 @@ def save_news_to_mysql(conn, news_list):
     VALUES (%s, %s)
     """
 
-    saved_count = 0
     for news in news_list:
         try:
             pub_date = datetime.strptime(news["published_date"], "%Y-%m-%d %H:%M:%S")
             cursor.execute(sql, (news["title"], pub_date))
-            saved_count += 1
-        except Exception as e:
-            print(f"[오류] 저장 실패: {news['title']} - {e}")
+        except:
+            continue
 
     conn.commit()
     cursor.close()
-    print(f"MySQL 저장 완료: {saved_count}개")
 
-
-def crawl_all_pages(date):
-    """지정한 날짜의 모든 페이지 크롤링"""
+def crawl_news_for_date(date_str):
     page = 1
-    total_saved = 0
+    collected_news = []
     conn = pymysql.connect(**DB_CONFIG)
 
-    while page <= MAX_PAGE:
-        news_list = get_stock_news(date, page)
+    while page <= MAX_PAGE and len(collected_news) < 10:
+        news_list = get_stock_news(date_str, page)
         if not news_list:
-            print(f"{page} 페이지: 뉴스 없음 → 종료")
             break
 
-        # 새 뉴스만 추려냄
-        new_news_list = [n for n in news_list if is_news_new(conn, n)]
-        if not new_news_list:
-            print(f"{page} 페이지: 새 뉴스 없음 → 종료")
-            break
-
-        save_news_to_mysql(conn, new_news_list)
-        total_saved += len(new_news_list)
+        for news in news_list:
+            if any(keyword in news["title"] for keyword in KEYWORDS):
+                if news not in collected_news:
+                    collected_news.append(news)
+                    if len(collected_news) >= 10:
+                        break
         page += 1
 
+    new_news_list = [n for n in collected_news if is_news_new(conn, n)]
+    if new_news_list:
+        save_news_to_mysql(conn, new_news_list)
+    else:
+        dummy_news = {"title": "0", "published_date": f"{date_str} 00:00:00"}
+        save_news_to_mysql(conn, [dummy_news])
+
     conn.close()
-    print(f"[완료] {date} 뉴스 총 {total_saved}개 저장")
 
+def update_one_year_news():
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM news")
+            count = cursor.fetchone()[0]
+    finally:
+        conn.close()
 
-# 실행
+    if count == 0:
+        # 초기화: 최근 365일 전체를 병렬로 크롤링
+        start_date = today - timedelta(days=364)
+        date_list = [start_date + timedelta(days=i) for i in range(365)]
+        date_str_list = [d.strftime('%Y-%m-%d') for d in date_list]
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(crawl_news_for_date, date_str) for date_str in date_str_list]
+            for _ in tqdm(as_completed(futures), total=len(futures), desc="크롤링 진행"):
+                pass  # 진행률만 표시
+    else:
+        conn = pymysql.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT MAX(DATE(published_date)) FROM news")
+                max_date = cursor.fetchone()[0]
+                cursor.execute("SELECT MIN(DATE(published_date)) FROM news")
+                min_date = cursor.fetchone()[0]
+
+            if max_date < today:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM news WHERE DATE(published_date) = %s", (min_date,))
+                conn.commit()
+
+                crawl_news_for_date(today.strftime('%Y-%m-%d'))
+            else:
+                print("DB가 최신 상태입니다.")
+        finally:
+            conn.close()
+
 if __name__ == "__main__":
-    crawl_all_pages(today)
+    update_one_year_news()
