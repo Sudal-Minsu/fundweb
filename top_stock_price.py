@@ -87,8 +87,11 @@ def process_stock(code):
         for _, row in df.iterrows():
             date_str = row['Date'].strftime('%Y-%m-%d')
             close_price = row['Close']
-            cursor.execute("REPLACE INTO top_stock_price (Date, Code, Close) VALUES (%s, %s, %s)",
-                           (date_str, code, close_price))
+            cursor.execute("""
+                INSERT INTO top_stock_price (Date, Code, Close)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE Close = VALUES(Close)
+            """, (date_str, code, close_price))
 
         conn.commit()
         cursor.close()
