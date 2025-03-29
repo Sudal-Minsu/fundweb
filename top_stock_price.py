@@ -63,8 +63,10 @@ def get_top_200_codes():
     df['invPER_rank'] = df['1/PER'].rank(ascending=False)
     df['avg_rank'] = (df['ROE_rank'] + df['invPER_rank']) / 2
 
-    top_200 = df.sort_values('avg_rank').head(200)
-    top_200_codes = list(set(top_200['종목코드'].tolist()))[:200]
+    top_200 = df.sort_values('avg_rank')
+    top_200 = top_200.drop_duplicates(subset='종목코드')
+    top_200 = top_200.head(200)
+    top_200_codes = top_200['종목코드'].tolist()
     print(f"상위 종목코드 추출 완료 (중복 제거 후 {len(top_200_codes)}개)")
     return top_200_codes
 
