@@ -58,22 +58,36 @@ def get_top_200_codes():
     df = df.dropna(subset=['PER', 'ROE'])
     df = df[df['PER'] > 0]
 
+    # FDR에서 200개 이상 데이터 보유한 종목만 필터링
+    valid_codes = []
+    print("\n[FDR 데이터 확인 중: 200일 이상 보유한 종목만 선별]")
+    for code in tqdm(df['종목코드'].tolist(), desc="데이터 길이 확인"):
+        try:
+            stock_df = fdr.DataReader(code, start_date, today)
+            if len(stock_df) >= 200:
+                valid_codes.append(code)
+        except:
+            continue
+
+    df = df[df['종목코드'].isin(valid_codes)]
+
+    # 랭킹 계산
     df['1/PER'] = 1 / df['PER']
     df['ROE_rank'] = df['ROE'].rank(ascending=False)
     df['invPER_rank'] = df['1/PER'].rank(ascending=False)
     df['avg_rank'] = (df['ROE_rank'] + df['invPER_rank']) / 2
 
-    top_200 = df.sort_values('avg_rank')
-    top_200 = top_200.drop_duplicates(subset='종목코드')
-    top_200 = top_200.head(200)
+    top_200 = df.sort_values('avg_rank').drop_duplicates(subset='종목코드').head(200)
     top_200_codes = top_200['종목코드'].tolist()
-    print(f"상위 종목코드 추출 완료 (중복 제거 후 {len(top_200_codes)}개)")
+
+    print(f"\n데이터 충분한 종목 중 상위 종목코드 추출 완료: {len(top_200_codes)}개")
     return top_200_codes
+
 
 def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
-        if df.empty:
+        if df.empty or len(df) < 200:
             print(f"[{code}] → FDR 데이터 없음 (저장 스킵)")
             return
 
