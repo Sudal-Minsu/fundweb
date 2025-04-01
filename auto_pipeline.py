@@ -39,6 +39,7 @@ def create_tables_if_not_exist():
         Date DATE NOT NULL,
         Code VARCHAR(20) NOT NULL,
         Close FLOAT,
+        Volume BIGINT,
         PRIMARY KEY (Date, Code)
     );
     """
