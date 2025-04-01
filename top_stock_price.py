@@ -18,7 +18,7 @@ start_date = today - datetime.timedelta(days=365)
 def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
 
-# 상위 200개 종목 추출
+# 최대 250개 추출해서 200개 통과 시점까지 처리
 def get_top_200_codes():
     def get_stock_data(market_type):
         all_data = []
@@ -58,41 +58,39 @@ def get_top_200_codes():
     df = df.dropna(subset=['PER', 'ROE'])
     df = df[df['PER'] > 0]
 
-    # FDR에서 200개 이상 데이터 보유한 종목만 필터링
-    valid_codes = []
-    print("\n[FDR 데이터 확인 중: 200일 이상 보유한 종목만 선별]")
-    for code in tqdm(df['종목코드'].tolist(), desc="데이터 길이 확인"):
-        try:
-            stock_df = fdr.DataReader(code, start_date, today)
-            if len(stock_df) >= 200:
-                valid_codes.append(code)
-        except:
-            continue
-
-    df = df[df['종목코드'].isin(valid_codes)]
-
-    # 랭킹 계산
     df['1/PER'] = 1 / df['PER']
     df['ROE_rank'] = df['ROE'].rank(ascending=False)
     df['invPER_rank'] = df['1/PER'].rank(ascending=False)
     df['avg_rank'] = (df['ROE_rank'] + df['invPER_rank']) / 2
 
-    top_200 = df.sort_values('avg_rank').drop_duplicates(subset='종목코드').head(200)
-    top_200_codes = top_200['종목코드'].tolist()
+    # 최대 250개 추출 후 조건 통과한 200개만 최종 선정
+    top_pool = df.sort_values('avg_rank').drop_duplicates(subset='종목코드').head(250)
+    top_codes_pool = top_pool['종목코드'].tolist()
 
-    print(f"\n데이터 충분한 종목 중 상위 종목코드 추출 완료: {len(top_200_codes)}개")
-    return top_200_codes
+    valid_codes = []
+    print("\n[FDR 데이터 확인 중: 거래량 0 없는 종목 선별]")
+    for code in tqdm(top_codes_pool, desc="조건 필터링 중"):
+        try:
+            df_stock = fdr.DataReader(code, start_date, today)
+            if len(df_stock) >= 200:
+                recent_100 = df_stock.tail(100)
+                if not (recent_100['Volume'].isna().any() or (recent_100['Volume'] <= 1).any()):
+                    valid_codes.append(code)
+            if len(valid_codes) >= 200:
+                break  # 200개 확보 시 중단
+        except:
+            continue
 
+    print(f"\n최종 조건 만족 종목 수: {len(valid_codes)}개")
+    return valid_codes
 
+# 상위 200개 종목의 주가 및 거래량 데이터 저장
 def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
-        if df.empty or len(df) < 200:
-            print(f"[{code}] → FDR 데이터 없음 (저장 스킵)")
-            return
 
         df.reset_index(inplace=True)
-        df = df[['Date', 'Close']]
+        df = df[['Date', 'Close', 'Volume']]
         df['Code'] = code
 
         conn = get_connection()
@@ -101,11 +99,12 @@ def process_stock(code):
         for _, row in df.iterrows():
             date_str = row['Date'].strftime('%Y-%m-%d')
             close_price = row['Close']
+            volume = row['Volume']
             cursor.execute("""
-                INSERT INTO top_stock_price (Date, Code, Close)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE Close = VALUES(Close)
-            """, (date_str, code, close_price))
+                INSERT INTO top_stock_price (Date, Code, Close, Volume)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE Close = VALUES(Close), Volume = VALUES(Volume)
+            """, (date_str, code, close_price, volume))
 
         conn.commit()
         cursor.close()
@@ -113,19 +112,32 @@ def process_stock(code):
 
     except Exception as e:
         print(f"[{code}] 처리 중 오류: {e}")
-
+        
 def main():
     conn = get_connection()
     cursor = conn.cursor()
+
+    # 1년 이전 데이터 삭제
     cutoff_date = today - datetime.timedelta(days=365)
     cursor.execute("DELETE FROM top_stock_price WHERE Date < %s", (cutoff_date,))
     conn.commit()
-    cursor.close()
-    conn.close()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
 
+    # 상위 200개 종목 추출
     top_200_codes = get_top_200_codes()
 
+    # 기존 종목 중 top_200_codes 에 포함되지 않는 것 삭제
+    format_strings = ','.join(['%s'] * len(top_200_codes))
+    cursor.execute(f"""
+        DELETE FROM top_stock_price 
+        WHERE Code NOT IN ({format_strings})
+    """, top_200_codes)
+    conn.commit()
+    cursor.close()
+    conn.close()
+    print(f"[기존 종목 정리 완료] 상위 200개 외 종목 삭제")
+
+    # 데이터 저장
     print(f"[처리 시작] 상위 {len(top_200_codes)}개 종목의 데이터 업데이트 중...")
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(process_stock, code) for code in top_200_codes]
@@ -134,6 +146,7 @@ def main():
 
     print("전체 데이터 저장 완료")
 
+    # 최종 종목 수 확인
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(DISTINCT Code) FROM top_stock_price")
