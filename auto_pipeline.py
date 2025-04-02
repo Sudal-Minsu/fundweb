@@ -3,9 +3,9 @@ from crawler import update_one_year_news
 from sentiment import (
     fetch_news_from_mysql, # 뉴스 불러오기
     analyze_sentiment, # 감성 분석
-    update_sentiment_in_mysql, # 감성 점수를 news 테이블에 저장
+    update_sentiment_in_mysql, # 감성 점수 저장
     calculate_daily_avg_sentiment, # 일별 평균 감성 점수 계산
-    save_daily_avg_to_mysql # 일별 평균 감성 점수를 avg_sentiment 테이블에 저장         
+    save_daily_avg_to_mysql # 일별 평균 감성 점수 저장         
 )
 from top_stock_price import run_top_stock_price  
 import pymysql
