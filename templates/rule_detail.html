@@ -82,12 +82,12 @@
 
                     if (!data || !data.labels) return;
 
-                    // ⏰ 업데이트 시간 표시
+                    // 업데이트 시간 표시
                     const now = new Date();
                     const formatted = now.toLocaleTimeString();
                     document.getElementById("update-time").textContent = `(업데이트: ${formatted})`;
 
-                    // 🎯 차트 다시 그리기
+                    // 차트 다시 그리기
                     const ctx = document.getElementById('sentimentChart').getContext('2d');
                     if (chart) chart.destroy();
                     chart = new Chart(ctx, {
