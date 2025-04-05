@@ -1,13 +1,13 @@
 from datetime import datetime
-from crawler import update_one_year_news  
+from crawler import update_news  
 from sentiment import (
     fetch_news_from_mysql, # 뉴스 불러오기
     analyze_sentiment, # 감성 분석하기
-    update_sentiment_in_mysql, # 감성 점수를 저장
+    update_sentiment_in_mysql, # 감성 점수를 news 테이블에 저장
     calculate_daily_avg_sentiment, # 일별 평균 감성 점수 계산
-    save_daily_avg_to_mysql # 일별 평균 감성 점수를 저장         
+    save_daily_avg_to_mysql # 일별 평균 감성 점수를 avg_sentiment 테이블에 저장         
 )
-from top_stock_price import run_top_stock_price  
+from stock_data import run_stock_data  
 import pymysql
 from config import DB_CONFIG
 
@@ -50,9 +50,9 @@ def create_tables_if_not_exist():
     );
     """
 
-    # 3. top_stock_price 테이블 생성
-    create_top_stock_table_sql = """
-    CREATE TABLE IF NOT EXISTS top_stock_price (
+    # 3. stock_data 테이블 생성
+    create_stock_data_sql = """
+    CREATE TABLE IF NOT EXISTS stock_data (
         Date DATE NOT NULL,
         Code VARCHAR(20) NOT NULL,
         Close FLOAT,
@@ -63,7 +63,7 @@ def create_tables_if_not_exist():
 
     cursor.execute(create_news_table_sql)
     cursor.execute(create_avg_sentiment_table_sql)
-    cursor.execute(create_top_stock_table_sql)
+    cursor.execute(create_stock_data_sql)
     conn.commit()
     cursor.close()
     conn.close()
@@ -81,14 +81,17 @@ def run_auto_pipeline():
     create_tables_if_not_exist()
     
     # 3. 뉴스 수집
-    update_one_year_news()
+    update_news()
 
     print("감성 분석 시작")
     # 4. 뉴스 데이터 가져오기
     news_data = fetch_news_from_mysql()
     if news_data:
         # 5. 감성 분석 수행
-        analyzed_data = [(analyze_sentiment(title), news_id) for news_id, title in news_data]
+        analyzed_data = [
+            (0.0 if title.strip() == "0" else analyze_sentiment(title), news_id)
+            for news_id, title in news_data
+        ]
         # 6. 감성 점수 업데이트
         update_sentiment_in_mysql(analyzed_data)
     else:
@@ -102,7 +105,7 @@ def run_auto_pipeline():
     
     print("주식 데이터 수집 시작")  
     # 9. 주식 데이터 수집 및 저장
-    run_top_stock_price()  
+    run_stock_data()  
     
     print("파이프라인 완료")
 
