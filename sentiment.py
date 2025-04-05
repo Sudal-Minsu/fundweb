@@ -68,13 +68,14 @@ def calculate_daily_avg_sentiment():
     query = """
     SELECT DATE(published_date) AS date, AVG(IFNULL(sentiment_score, 0))
     FROM news
-    GROUP BY DATE(published_date);
+    GROUP BY DATE(published_date)
+    ORDER BY DATE(published_date) DESC
     """
     cursor.execute(query)
     results = cursor.fetchall()
     cursor.close()
     conn.close()
-    return results 
+    return results
 
 """ 계산된 날짜별 평균 감성 점수를 DB에 저장 """
 
