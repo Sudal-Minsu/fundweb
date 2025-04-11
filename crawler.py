@@ -9,19 +9,39 @@ from difflib import SequenceMatcher
 
 # 크롤링 대상 키워드 목록
 KEYWORDS = [
+    # 금리 및 통화정책 (국내 + 미국)
     "기준금리", "금리 인상", "금리 인하", "한국은행", "통화정책",
+    "연방준비제도", "미국 금리", "연준", "파월", "FOMC",
+
+    # 경기 흐름 및 경기지표
     "경기침체", "경기둔화", "경기전망", "경제성장률", "내수부진",
-    "소비자물가", "물가상승률", "물가안정", "인플레이션", "디플레이션", "스태그플레이션",
-    "정부 정책", "기획재정부", "재정정책", "부양책", "경기부양", "확장재정", "세수 감소", "가계부채",
-    "고용률", "실업률", "민간소비", "가계대출", "실질소득", "체감경기"
+    "제조업 지수", "PMI", "소매판매", "무역수지", "수출입",
+
+    # 물가 및 인플레이션
+    "소비자물가", "생산자물가", "물가상승률", "물가안정",
+    "인플레이션", "디플레이션", "스태그플레이션",
+    "유가 상승", "유가", "공급망", "식료품 가격",
+
+    # 정책 및 재정
+    "정부 정책", "기획재정부", "재정정책", "부양책",
+    "경기부양", "확장재정", "SOC 투자", "예산안", "정책 발표",
+    "세금 인하", "규제 완화", "세수",
+
+    # 소비/대출/소득 관련
+    "민간소비", "가계대출", "가계부채", "실질소득", "체감경기",
+    "고용률", "실업률",
+
+    # 지정학적 리스크 및 글로벌 변수
+    "전쟁", "지정학", "중국 경기", "미중",
+    "중동", "원자재", "공급망", "세계경제"
 ]
 
 today = datetime.now().date()
 BASE_URL = "https://finance.naver.com/news/mainnews.naver"
 MAX_PAGE = 30  # 최대 페이지 제한
 
-""" 뉴스 크롤링 """
 
+""" 뉴스 크롤링 """
 def get_stock_news(date_str, page):
     url = f"{BASE_URL}?date={date_str}&page={page}"
     response = requests.get(url)
@@ -50,8 +70,8 @@ def get_stock_news(date_str, page):
 
     return news_list
 
-""" 뉴스 중복 체크 """
 
+""" 뉴스 중복 체크 """
 def is_news_new(conn, news, similarity_threshold=0.85):
     with conn.cursor() as cursor:
         try:
@@ -74,8 +94,8 @@ def is_news_new(conn, news, similarity_threshold=0.85):
 
         return True
 
-""" MySQL에 뉴스 저장 """
 
+""" MySQL에 뉴스 저장 """
 def save_news_to_mysql(conn, news_list):
     # 뉴스가 없는 경우
     if not news_list:
@@ -99,8 +119,8 @@ def save_news_to_mysql(conn, news_list):
     conn.commit()
     cursor.close()
 
-""" 뉴스 크롤링 및 DB 업데이트 """
 
+""" 뉴스 크롤링 및 DB 업데이트 """
 def crawl_news_for_date(date_str):
     page = 1 
     collected_news = []
@@ -133,14 +153,14 @@ def crawl_news_for_date(date_str):
 
     conn.close()
 
-""" 3년치 뉴스 업데이트 """
 
+""" 뉴스 업데이트 """
 def update_news():
     today = datetime.now().date()
-    start_date = today - timedelta(days=1094)  # 오늘 포함 1095일
+    start_date = today - timedelta(days=1824)  
 
-    # 1. 3년치 전체 날짜 생성
-    full_date_list = [start_date + timedelta(days=i) for i in range(1095)]
+    # 1. 전체 날짜 생성
+    full_date_list = [start_date + timedelta(days=i) for i in range(1824)]
     full_date_str_list = [d.strftime("%Y-%m-%d") for d in full_date_list]
 
     # 2. DB에서 현재 존재하는 뉴스 날짜 조회
@@ -150,8 +170,8 @@ def update_news():
             cursor.execute("SELECT DISTINCT DATE(published_date) FROM news")
             existing_dates = {row[0].strftime("%Y-%m-%d") for row in cursor.fetchall()}
 
-            # 3. 3년 초과된 뉴스 삭제
-            delete_cutoff = start_date  # 3년 전 이전 날짜
+            # 3. 초과된 뉴스 삭제
+            delete_cutoff = start_date 
             cursor.execute("DELETE FROM news WHERE DATE(published_date) < %s", (delete_cutoff,))
             conn.commit()
     finally:
@@ -161,7 +181,7 @@ def update_news():
     missing_dates = [d for d in full_date_str_list if d not in existing_dates]
 
     if not missing_dates:
-        print("뉴스 데이터가 3년치 모두 채워져 있습니다.")
+        print("뉴스 데이터가 모두 채워져 있습니다.")
         return
 
     print(f"누락된 {len(missing_dates)}일에 대해 뉴스 크롤링을 시작합니다.")
