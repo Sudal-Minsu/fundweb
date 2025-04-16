@@ -16,7 +16,7 @@ from config import DB_CONFIG
 def create_tables_if_not_exist():
     conn = pymysql.connect(**DB_CONFIG)
     cursor = conn.cursor()
-
+    
     # 1. news 테이블 생성
     create_news_table_sql = """
     CREATE TABLE IF NOT EXISTS news (
