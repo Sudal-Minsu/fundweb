@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Samsung Biologics Co., Ltd.</title>
+  <title>SK hynix Inc.</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     body {
@@ -28,7 +28,6 @@
     }
     .nav-left a {
       font-size: 24px;
-      font-weight: normal;
       font-family: 'DM Serif Display', serif;
       color: black;
       text-decoration: none;
@@ -135,26 +134,26 @@
 <body>
   <nav>
     <div class="nav-left">
-      <img src="seoultech-logo.png" alt="SEOULTECH Logo">
-      <a href="home.html">StockLENS</a>
+      <img src="{{ url_for('static', filename='seoultech-logo.png') }}" alt="SEOULTECH Logo">
+      <a href="/">StockLENS</a>
     </div>
     <div class="nav-links">
-      <a href="home.html" class="home-button">Home</a>
-      <a href="papertrading.html">Paper Trading</a>
-      <a href="toppicks.html">Top Picks</a>
+      <a href="/" class="home-button">Home</a>
+      <a href="/papertrading.html">Paper Trading</a>
+      <a href="/toppicks.html">Top Picks</a>
       <div class="dropdown">
         <a href="#">Forecasting ☰</a>
         <div class="dropdown-content">
-          <a href="samsung.html">Samsung Electronics</a>
-          <a href="skhynix.html">SK hynix</a>
-          <a href="lgenergy.html">LG Energy Solution</a>
-          <a href="samsungbio.html">Samsung Biologics</a>
-          <a href="hyundai.html">Hyundai Motors</a>
-          <a href="apple.html">Apple</a>
-          <a href="microsoft.html">Microsoft</a>
-          <a href="nvidia.html">NVIDIA</a>
-          <a href="amazon.html">Amazon.com</a>
-          <a href="alphabet.html">Alphabet</a>
+          <a href="/samsung.html">Samsung Electronics</a>
+          <a href="/skhynix.html">SK hynix</a>
+          <a href="/lgenergy.html">LG Energy Solution</a>
+          <a href="/samsungbio.html">Samsung Biologics</a>
+          <a href="/hyundai.html">Hyundai Motors</a>
+          <a href="/apple.html">Apple</a>
+          <a href="/microsoft.html">Microsoft</a>
+          <a href="/nvidia.html">NVIDIA</a>
+          <a href="/amazon.html">Amazon.com</a>
+          <a href="/alphabet.html">Alphabet</a>
         </div>
       </div>
     </div>
@@ -167,17 +166,17 @@
     </div>
     <div class="cards">
       <div class="card">
-        <img src="chart1.png?timestamp=<?=Date.now()?>" alt="Rule 1">
+        <img src="{{ url_for('static', filename='chart1.png') }}?t={{ timestamp }}" alt="Rule 1">
         <div class="rule-title">Rule 1</div>
         <div class="rule-desc">write rule_name</div>
       </div>
       <div class="card">
-        <img src="chart2.png?timestamp=<?=Date.now()?>" alt="Rule 2">
+        <img src="{{ url_for('static', filename='chart2.png') }}?t={{ timestamp }}" alt="Rule 2">
         <div class="rule-title">Rule 2</div>
         <div class="rule-desc">write rule_name</div>
       </div>
       <div class="card">
-        <img src="chart3.png?timestamp=<?=Date.now()?>" alt="Rule 3">
+        <img src="{{ url_for('static', filename='chart3.png') }}?t={{ timestamp }}" alt="Rule 3">
         <div class="rule-title">Rule 3</div>
         <div class="rule-desc">write rule_name</div>
       </div>
