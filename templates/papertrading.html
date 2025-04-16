@@ -140,26 +140,26 @@
 <body>
   <nav>
     <div class="nav-left">
-      <img src="seoultech-logo.png" alt="SEOULTECH Logo">
-      <a href="home.html">StockLENS</a>
+      <img src="{{ url_for('static', filename='seoultech-logo.png') }}" alt="SEOULTECH Logo">
+      <a href="{{ url_for('index') }}">StockLENS</a>
     </div>
     <div class="nav-links">
-      <a href="home.html" class="home-button">Home</a>
-      <a href="papertrading.html">Paper Trading</a>
-      <a href="toppicks.html">Top Picks</a>
+      <a href="{{ url_for('index') }}" class="home-button">Home</a>
+      <a href="{{ url_for('paper_trading') }}">Paper Trading</a>
+      <a href="{{ url_for('top_picks') }}">Top Picks</a>
       <div class="dropdown">
         <a href="#">Forecasting ☰</a>
         <div class="dropdown-content">
-          <a href="samsung.html">Samsung Electronics</a>
-          <a href="skhynix.html">SK hynix</a>
-          <a href="lgenergy.html">LG Energy Solution</a>
-          <a href="samsungbio.html">Samsung Biologics</a>
-          <a href="hyundai.html">Hyundai Motors</a>
-          <a href="apple.html">Apple</a>
-          <a href="microsoft.html">Microsoft</a>
-          <a href="nvidia.html">NVIDIA</a>
-          <a href="amazon.html">Amazon.com</a>
-          <a href="alphabet.html">Alphabet</a>
+          <a href="/samsung.html">Samsung Electronics</a>
+          <a href="/skhynix.html">SK hynix</a>
+          <a href="/lgenergy.html">LG Energy Solution</a>
+          <a href="/samsungbio">Samsung Biologics</a>
+          <a href="/hyundai.html">Hyundai Motors</a>
+          <a href="/apple.html">Apple</a>
+          <a href="/microsoft.html">Microsoft</a>
+          <a href="/nvidia.html">NVIDIA</a>
+          <a href="/amazon.html">Amazon.com</a>
+          <a href="/alphabet.html">Alphabet</a>
         </div>
       </div>
     </div>
@@ -171,12 +171,12 @@
     <div class="graph-container">
       <div class="graph-row">
         <div class="graph">
-          <img src="graph1.png" alt="Graph 1">
-          <div class="graph-title"><write_name_of_graph1></div>
+          <img src="{{ url_for('static', filename='graph1.png') }}?t={{ timestamp }}" alt="Graph 1">
+          <div class="graph-title">{{ graph1_name }}</div>
         </div>
         <div class="graph">
-          <img src="graph2.png" alt="Graph 2">
-          <div class="graph-title"><write_name_of_graph2></div>
+          <img src="{{ url_for('static', filename='graph2.png') }}?t={{ timestamp }}" alt="Graph 2">
+          <div class="graph-title">{{ graph2_name }}</div>
         </div>
       </div>
       <div class="graph graph-full">
