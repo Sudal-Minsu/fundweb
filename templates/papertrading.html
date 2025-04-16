@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+	<title></title>
+	<meta name="generator" content="LibreOffice 24.8.1.2 (Linux)"/>
+	<meta name="created" content="00:00:00"/>
+	<meta name="changed" content="00:00:00"/>
+	<style type="text/css">
+		@page { size: 8.27in 11.69in; margin: 0.79in }
+		p { line-height: 115%; margin-bottom: 0.1in; background: transparent }
+		pre { background: transparent }
+		pre.western { font-family: "Liberation Mono", monospace; font-size: 10pt }
+		pre.cjk { font-family: "NSimSun", monospace; font-size: 10pt }
+		pre.ctl { font-family: "Liberation Mono", monospace; font-size: 10pt }
+	</style>
+</head>
+<body lang="en-US" link="#000080" vlink="#800000" dir="ltr"><pre class="western">&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;ko&quot;&gt;
+&lt;head&gt;
+  &lt;meta charset=&quot;UTF-8&quot;&gt;
+  &lt;title&gt;Paper Trading&lt;/title&gt;
+  &lt;link href=&quot;https://fonts.googleapis.com/css2?family=DM+Serif+Display&amp;display=swap&quot; rel=&quot;stylesheet&quot;&gt;
+  &lt;style&gt;
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+    }
+    .nav-links a {
+      margin-left: 12px;
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .dropdown {
+      position: relative;
+    }
+    .dropdown-content {
+      display: none;
+      position: absolute;
+      top: 28px;
+      right: 0;
+      background-color: #ffffff;
+      min-width: 180px;
+      box-shadow: 0px 4px 8px rgba(0,0,0,0.15);
+      z-index: 1;
+    }
+    .dropdown-content a {
+      padding: 10px 15px;
+      display: block;
+      text-decoration: none;
+      font-size: 13px;
+      color: #000;
+      background-color: #ffffff;
+    }
+    .dropdown-content a:hover {
+      background-color: #d9d9d9;
+    }
+    .dropdown:hover .dropdown-content {
+      display: block;
+    }
+    .main {
+      padding: 40px 60px;
+      color: white;
+    }
+    .page-title {
+      font-size: 32px;
+      margin-bottom: 30px;
+      font-family: 'DM Serif Display', serif;
+    }
+    .graph-container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .graph-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .graph {
+      background-color: #ffffff;
+      border-radius: 8px;
+      padding: 15px;
+      width: 48%;
+      text-align: center;
+      color: #3a3a3a;
+    }
+    .graph-full {
+      width: 100%;
+      text-align: center;
+      background-color: #3a3a3a;
+      color: white;
+      font-weight: bold;
+    }
+    .graph img {
+      width: 100%;
+      border-radius: 4px;
+    }
+    .graph-title {
+      margin-top: 10px;
+      font-size: 16px;
+      font-weight: bold;
+    }
+    .profit-positive {
+      color: lightgreen;
+    }
+    .profit-negative {
+      color: #ff6b6b;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    footer {
+      background-color: #ffffff;
+      height: 80px;
+      margin-top: 60px;
+    }
+  &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;nav&gt;
+    &lt;div class=&quot;nav-left&quot;&gt;
+      &lt;img src=&quot;seoultech-logo.png&quot; alt=&quot;SEOULTECH Logo&quot;&gt;
+      &lt;a href=&quot;home.html&quot;&gt;StockLENS&lt;/a&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;nav-links&quot;&gt;
+      &lt;a href=&quot;home.html&quot; class=&quot;home-button&quot;&gt;Home&lt;/a&gt;
+      &lt;a href=&quot;papertrading.html&quot;&gt;Paper Trading&lt;/a&gt;
+      &lt;a href=&quot;toppicks.html&quot;&gt;Top Picks&lt;/a&gt;
+      &lt;div class=&quot;dropdown&quot;&gt;
+        &lt;a href=&quot;#&quot;&gt;Forecasting &amp;#9776;&lt;/a&gt;
+        &lt;div class=&quot;dropdown-content&quot;&gt;
+          &lt;a href=&quot;samsung.html&quot;&gt;Samsung Electronics&lt;/a&gt;
+          &lt;a href=&quot;skhynix.html&quot;&gt;SK hynix&lt;/a&gt;
+          &lt;a href=&quot;lgenergy.html&quot;&gt;LG Energy Solution&lt;/a&gt;
+          &lt;a href=&quot;samsungbio.html&quot;&gt;Samsung Biologics&lt;/a&gt;
+          &lt;a href=&quot;hyundai.html&quot;&gt;Hyundai Motors&lt;/a&gt;
+          &lt;a href=&quot;apple.html&quot;&gt;Apple&lt;/a&gt;
+          &lt;a href=&quot;microsoft.html&quot;&gt;Microsoft&lt;/a&gt;
+          &lt;a href=&quot;nvidia.html&quot;&gt;NVIDIA&lt;/a&gt;
+          &lt;a href=&quot;amazon.html&quot;&gt;Amazon.com&lt;/a&gt;
+          &lt;a href=&quot;alphabet.html&quot;&gt;Alphabet&lt;/a&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/nav&gt;
+
+  &lt;div class=&quot;main&quot;&gt;
+    &lt;div class=&quot;page-title&quot;&gt;Paper Trading&lt;/div&gt;
+
+    &lt;div class=&quot;graph-container&quot;&gt;
+      &lt;div class=&quot;graph-row&quot;&gt;
+        &lt;div class=&quot;graph&quot;&gt;
+          &lt;img src=&quot;graph1.png&quot; alt=&quot;Graph 1&quot;&gt;
+          &lt;div class=&quot;graph-title&quot;&gt;&amp;lt;write_name_of_graph1&amp;gt;&lt;/div&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;graph&quot;&gt;
+          &lt;img src=&quot;graph2.png&quot; alt=&quot;Graph 2&quot;&gt;
+          &lt;div class=&quot;graph-title&quot;&gt;&amp;lt;write_name_of_graph2&amp;gt;&lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;graph graph-full&quot;&gt;
+        &lt;p&gt;
+          ììµê¸: &lt;span class=&quot;{% if rule.profit &gt; 0 %}profit-positive{% else %}profit-negative{% endif %}&quot;&gt;${{ rule.profit }}&lt;/span&gt; |
+          ììµë¥&nbsp;: &lt;span class=&quot;{% if rule.yield &gt; 0 %}profit-positive{% else %}profit-negative{% endif %}&quot;&gt;{{ rule.yield }}%&lt;/span&gt;
+        &lt;/p&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;footer&gt;&lt;/footer&gt;
+&lt;/body&gt;
+&lt;/html&gt;</pre>
+</body>
+</html>

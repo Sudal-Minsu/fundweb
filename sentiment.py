@@ -14,8 +14,8 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 # 문장 분류용 모델 불러오기
 model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
 
+
 """ MySQL에서 감성 분석이 필요한 뉴스 데이터 가져오기 """ 
-    
 def fetch_news_from_mysql():
     conn = pymysql.connect(**DB_CONFIG)
     cursor = conn.cursor()
@@ -25,8 +25,8 @@ def fetch_news_from_mysql():
     conn.close()
     return news_data
 
-""" 감성 분석 수행 (softmax 적용) """
 
+""" 감성 분석 수행 (softmax 적용) """
 def analyze_sentiment(text):
     # return_tensors="pt": PyTorch 텐서 형식으로 반환
     # padding=True: 길이가 다른 문장들을 동일한 길이로 맞춤(0으로 채움)
@@ -45,8 +45,8 @@ def analyze_sentiment(text):
     sentiment_score = (probabilities[0][2] - probabilities[0][0]).item()
     return round(sentiment_score, 4)
 
-""" MySQL에 감성 점수 업데이트 """
 
+""" MySQL에 감성 점수 업데이트 """
 def update_sentiment_in_mysql(analyzed_data):
     if not analyzed_data:
         print("업데이트할 감성 분석 데이터가 없습니다.")
@@ -60,24 +60,25 @@ def update_sentiment_in_mysql(analyzed_data):
     conn.close()
     print(f"MySQL 감성 점수 업데이트 완료: {len(analyzed_data)}개 항목")
 
-""" 날짜별 평균 감성 점수 계산 (NULL은 0으로 간주) """
 
+""" 날짜별 평균 감성 점수 계산 (NULL은 0으로 간주) """
 def calculate_daily_avg_sentiment():
     conn = pymysql.connect(**DB_CONFIG)
     cursor = conn.cursor()
     query = """
     SELECT DATE(published_date) AS date, AVG(IFNULL(sentiment_score, 0))
     FROM news
-    GROUP BY DATE(published_date);
+    GROUP BY DATE(published_date)
+    ORDER BY DATE(published_date) DESC
     """
     cursor.execute(query)
     results = cursor.fetchall()
     cursor.close()
     conn.close()
-    return results 
+    return results
+
 
 """ 계산된 날짜별 평균 감성 점수를 DB에 저장 """
-
 def save_daily_avg_to_mysql(daily_averages):
     if not daily_averages:
         print("저장할 평균 감성 데이터가 없습니다.")
