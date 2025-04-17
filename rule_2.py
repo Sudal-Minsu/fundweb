@@ -1,13 +1,13 @@
 # 데이터 관련 설정
 SEQ_LEN = 30             # 입력 시퀀스 길이 (일 단위)
 TRAIN_YEARS = 5          # 학습에 사용할 데이터 기간 (년 단위)
-TEST_PERIOD_DAYS = 50    # 백테스트 기간 (일 단위)
+TEST_PERIOD_DAYS = 60    # 백테스트 기간 (일 단위)
 RSI_n = 2                # RSI 계산에 사용할 기간 (n일)
-STOCK_NUMBER = 20        # 종목 수 (최대 200개)
+STOCK_NUMBER = 100        # 종목 수 (최대 200개)
 
 # 백테스트 시작 날짜 (사용자가 원하는 날짜로 수정 가능)
 import pandas as pd
-BACKTEST_START_DATE = pd.to_datetime("2024-10-07")          
+BACKTEST_START_DATE = pd.to_datetime("2025-01-03")          
 
 # 예측 파라미터 (n과 a)
 FUTURE_N = 2             # 몇 일 뒤의 종가를 기준으로 할지 (n일 뒤)
@@ -36,7 +36,7 @@ CONTINUOUS_COLS = [
 ]
 
 BINARY_COLS = [
-    'RSI_oversold', 
+    #'RSI_oversold', 
     'RSI_overbought',
     #'MACD_cross_up',
     #'MACD_cross_down',
@@ -209,8 +209,8 @@ def prepare_stock_models(engine, top_codes):
         df_stock['RSI_n'] = compute_rsi(df_stock['Close'], period=RSI_n)
         df_stock['RSI_b'] = compute_rsi(df_stock['Close'], period=RSI_b)
         df_stock['RSI_normal_zone'] = ((df_stock['RSI_n'] >= 30) & (df_stock['RSI_n'] <= 70)).astype(int)
-        df_stock['RSI_oversold'] = (df_stock['RSI_n'] < 30).astype(int)
-        df_stock['RSI_overbought'] = (df_stock['RSI_n'] > 70).astype(int)
+        df_stock['RSI_oversold'] = (df_stock['RSI_n'] < 40).astype(int)
+        df_stock['RSI_overbought'] = (df_stock['RSI_n'] > 60).astype(int)
         
         # MACD 관련
         df_stock['EMA12'] = df_stock['Close'].ewm(span=12, adjust=False).mean()
@@ -339,7 +339,7 @@ def run_custom_backtest(stock_models, global_test_dates):
         # 매수 후보 종목 
         buy_candidates = {}
         
-        # 매수 후보 종목 평가
+        # 매수 조건 평가 (매수 관련 조건 및 예측, f1 score 등)
         for code in code_list:
             data = stock_models[code]
             df = data['df']
@@ -363,6 +363,8 @@ def run_custom_backtest(stock_models, global_test_dates):
             if len(df_subset) >= 60:
                 ma20 = df_subset['Close'].rolling(20).mean().iloc[-1]
                 ma60 = df_subset['Close'].rolling(60).mean().iloc[-1]
+                ma20_prev = df_subset['Close'].rolling(20).mean().iloc[-2]
+                ma60_prev = df_subset['Close'].rolling(60).mean().iloc[-2]
             else:
                 ma20 = None
                 ma60 = None
@@ -427,29 +429,52 @@ def run_custom_backtest(stock_models, global_test_dates):
             else:
                 data["recent_avg_f1"] = None
                 
-            # 매도 조건   
-            shares = data.get("shares", 0)
-            buy_price = data.get("buy_price", None)
-            data["sell_candidate"] = 0
-            data["sell_reason"] = None  
-            if shares > 0 and buy_price is not None:
+            # 매수 조건 평가 (매수 후보 종목 선정)
+            if ma20 and ma60 and (ma20 > ma20_prev) and (ma60 > ma60_prev) and (pred_prob[0] > BUY_PROB_THRESHOLD) and (pct_change < 0):
+                buy_candidates[code] = {"price": close_yesterday}
+                    
+        # 매도 조건 평가 
+        for code in code_list:
+            data = stock_models[code]
+            # 포지션 보유 여부 확인
+            if data.get("shares", 0) > 0 and data.get("buy_price") is not None:
+                df_subset_sell = data["df"][data["df"]['Date'] < test_date]
+                if len(df_subset_sell) < 1:
+                    continue
+                close_yesterday = df_subset_sell['Close'].iloc[-1]
+                buy_price = data["buy_price"]
+                try:
+                    rsi_yesterday = df_subset_sell['RSI_b'].dropna().iloc[-1]
+                except IndexError:
+                    rsi_yesterday = 50
                 if close_yesterday > buy_price * 1.05:
                     data["sell_candidate"] = 100
                     data["sell_reason"] = "익절"
-                elif close_yesterday <= buy_price * 0.97:  
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "손절"
-                elif close_yesterday > buy_price and pred_prob[1] > SELL_PROB_THRESHOLD and rsi_yesterday > 55:
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "예측 기반 매도"
-                elif close_yesterday > buy_price and rsi_yesterday > 60:
+                # elif close_yesterday <= buy_price * 0.97:
+                #     data["sell_candidate"] = 100
+                #     data["sell_reason"] = "손절"
+                elif close_yesterday > buy_price and rsi_yesterday > 55:
                     data["sell_candidate"] = 100
                     data["sell_reason"] = "RSI > 60"
-                    
-            # 매수 조건 
-            if ma20 and ma60 and ma20 > ma60 and (rsi_yesterday < 45) and (pred_prob[0] > BUY_PROB_THRESHOLD):
-                buy_candidates[code] = {"price": close_yesterday}
-                
+                else:
+                    # 추가 매도 조건: 예측 기반 매도 및 RSI 조건 (충분한 데이터가 있을 경우만 예측 수행)
+                    if len(df_subset_sell) >= SEQ_LEN:
+                        window_df_sell = df_subset_sell.iloc[-SEQ_LEN:]
+                        scaled_cont_sell = data['scaler'].transform(window_df_sell[CONTINUOUS_COLS])
+                        binary_data_sell = window_df_sell[BINARY_COLS].values
+                        features_input_sell = np.concatenate([scaled_cont_sell, binary_data_sell], axis=1)
+                        features_input_sell = np.expand_dims(features_input_sell, axis=0)
+                        pred_prob_sell = data['model'].predict(features_input_sell, verbose=0)[0]
+                    else:
+                        pred_prob_sell = None
+                    if (pred_prob_sell is not None and close_yesterday > buy_price 
+                        and pred_prob_sell[1] > SELL_PROB_THRESHOLD and rsi_yesterday > 55):
+                        data["sell_candidate"] = 100
+                        data["sell_reason"] = "예측 기반 매도"
+                    else:
+                        data["sell_candidate"] = 0
+                        data["sell_reason"] = None
+                        
         # 최근 2일간 f1-score 평균 순위가 상위 BOTTOM_N_FOR_SELL_RANK 밖이면 100% 매도 
         ranking_list = []
         for code in code_list:
@@ -507,7 +532,7 @@ def run_custom_backtest(stock_models, global_test_dates):
                             
                             # 청산 후 초기화
                             data["buy_price"] = None
-
+                            
         # 매수 주문 실행 
         if buy_candidates:
             sorted_candidates = sorted(
@@ -548,7 +573,7 @@ def run_custom_backtest(stock_models, global_test_dates):
                         "success": None,
                         "sell_reason": None
                     })
-
+                    
         # 당일 포트폴리오 가치 업데이트
         total_portfolio_value = total_cash
         for code in code_list:
@@ -729,7 +754,7 @@ def plot_top_bottom_loss_curves(loss_curve_dict, top_n=10):
 
 """ SHAP 분석 함수 """
 def run_shap_analysis(stock_models):
-
+    
     # 매매 기록 추출
     trade_records = []
     for code, data in stock_models.items():
@@ -750,87 +775,83 @@ def run_shap_analysis(stock_models):
 
     top3 = df_trades.sort_values(by="profit_pct", ascending=False).head(3)
     bottom3 = df_trades.sort_values(by="profit_pct", ascending=True).head(3)
-    selected_trades = pd.concat([top3, bottom3], ignore_index=True)
 
-    if selected_trades.empty:
+    if top3.empty and bottom3.empty:
         print("[SHAP] 선택된 매매 기록이 없습니다.")
         return
 
-    # SHAP heatmap 그리기용 subplot 준비
-    num_plots = len(selected_trades)
-    nrows = 2 if num_plots > 3 else 1
-    ncols = 3 if num_plots > 3 else num_plots
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4 * ncols, 4 * nrows))
-    axes = axes.flatten() if num_plots > 1 else [axes]
+    # SHAP heatmap 그리기용 subplot 준비 (3행 2열: 왼쪽 상위, 오른쪽 하위)
+    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(12, 8))
 
-    for idx, (_, trade) in enumerate(selected_trades.iterrows()):
-        code = trade["code"]
-        buy_date = trade["buy_date"]
-        profit_pct = trade["profit_pct"]
-        data = stock_models.get(code)
-        if data is None:
-            continue
+    # top3는 왼쪽 열, bottom3는 오른쪽 열
+    trade_groups = [(top3, 0), (bottom3, 1)]
 
-        df_stock = data["df"]
-        scaler = data["scaler"]
-        model = data["model"]
+    for group, col in trade_groups:
+        for row, (_, trade) in enumerate(group.iterrows()):
+            code = trade["code"]
+            buy_date = trade["buy_date"]
+            profit_pct = trade["profit_pct"]
+            data = stock_models.get(code)
+            if data is None:
+                continue
 
-        # SHAP 값을 계산할 때 사용할 입력 시퀀스 (매수일 직전 SEQ_LEN일)
-        df_seq = df_stock[df_stock["Date"] < buy_date].tail(SEQ_LEN)
-        if len(df_seq) < SEQ_LEN:
-            print(f"[SHAP] {code}의 {buy_date} 이전 시퀀스 부족")
-            continue
-        scaled_cont = scaler.transform(df_seq[CONTINUOUS_COLS])
-        binary_data = df_seq[BINARY_COLS].values
-        X_input = np.concatenate([scaled_cont, binary_data], axis=1)
-        X_input = np.expand_dims(X_input, axis=0)
+            df_stock = data["df"]
+            scaler = data["scaler"]
+            model = data["model"]
 
-        # 배경 데이터: 학습 구간에서 무작위 시퀀스 10개 샘플링
-        train_cutoff = BACKTEST_START_DATE - pd.DateOffset(years=TRAIN_YEARS)
-        df_train = df_stock[(df_stock["Date"] >= train_cutoff) & (df_stock["Date"] < buy_date)]
-        # SEQ_LEN + 10일 이상 데이터 필요
-        if len(df_train) < SEQ_LEN + 10:
-            print(f"[SHAP] {code}의 배경 학습 시퀀스 부족")
-            continue
+            # SHAP 값을 계산할 때 사용할 입력 시퀀스 (매수일 직전 SEQ_LEN일)
+            df_seq = df_stock[df_stock["Date"] < buy_date].tail(SEQ_LEN)
+            if len(df_seq) < SEQ_LEN:
+                print(f"[SHAP] {code}의 {buy_date} 이전 시퀀스 부족")
+                continue
+            scaled_cont = scaler.transform(df_seq[CONTINUOUS_COLS])
+            binary_data = df_seq[BINARY_COLS].values
+            X_input = np.concatenate([scaled_cont, binary_data], axis=1)
+            X_input = np.expand_dims(X_input, axis=0)
 
-        scaled_cont_train = scaler.transform(df_train[CONTINUOUS_COLS])
-        binary_data_train = df_train[BINARY_COLS].values
-        features_matrix_train = np.concatenate([scaled_cont_train, binary_data_train], axis=1)
+            # 배경 데이터: 학습 구간에서 무작위 시퀀스 10개 샘플링
+            train_cutoff = BACKTEST_START_DATE - pd.DateOffset(years=TRAIN_YEARS)
+            df_train = df_stock[(df_stock["Date"] >= train_cutoff) & (df_stock["Date"] < buy_date)]
+            if len(df_train) < SEQ_LEN + 10:
+                print(f"[SHAP] {code}의 배경 학습 시퀀스 부족")
+                continue
+            
+            scaled_cont_train = scaler.transform(df_train[CONTINUOUS_COLS])
+            binary_data_train = df_train[BINARY_COLS].values
+            features_matrix_train = np.concatenate([scaled_cont_train, binary_data_train], axis=1)
+            
+            # 생성 가능한 시퀀스의 개수
+            num_seq = len(features_matrix_train) - SEQ_LEN + 1
+            if num_seq < 10:
+                print(f"[SHAP] {code}의 배경 시퀀스 부족")
+                continue
+            
+            # 생성 가능한 시퀀스 인덱스 범위 내에서 10개 무작위 선택
+            rand_indices = np.random.choice(num_seq, size=10, replace=False)
+            background_data = np.array([
+                features_matrix_train[i:i + SEQ_LEN] for i in rand_indices
+            ])
 
-        # 생성 가능한 시퀀스의 개수
-        num_seq = len(features_matrix_train) - SEQ_LEN + 1
-        if num_seq < 10:
-            print(f"[SHAP] {code}의 배경 시퀀스 부족")
-            continue
-        # 생성 가능한 시퀀스 인덱스 범위 내에서 10개 무작위 선택
-        rand_indices = np.random.choice(num_seq, size=10, replace=False)
-        background_data = np.array([
-            features_matrix_train[i:i + SEQ_LEN] for i in rand_indices
-        ])
+            # SHAP 계산
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                explainer = shap.GradientExplainer(model, background_data)
+                shap_values = explainer.shap_values(X_input)
 
-        # SHAP 계산
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning)
-            explainer = shap.GradientExplainer(model, background_data)
-            shap_values = explainer.shap_values(X_input)
+            shap_vals = shap_values[0] if isinstance(shap_values, list) else shap_values
+            if shap_vals.ndim == 4 and shap_vals.shape[-1] == 2:
+                shap_vals = shap_vals[..., 0]
+            shap_matrix = shap_vals[0]
 
-        shap_vals = shap_values[0] if isinstance(shap_values, list) else shap_values
-        if shap_vals.ndim == 4 and shap_vals.shape[-1] == 2:
-            shap_vals = shap_vals[..., 0]
-        shap_matrix = shap_vals[0]
-
-        ax = axes[idx]
-        sns.heatmap(
-            shap_matrix.T, cmap="coolwarm", center=0,
-            xticklabels=[f"T{i}" for i in range(SEQ_LEN)],
-            yticklabels=FEATURE_COLUMNS,
-            ax=ax
-        )
-        ax.set_title(f"{code} | {buy_date.date()} | 수익률: {profit_pct:.2%}")
-
-    # 나머지 subplot 제거
-    for j in range(idx + 1, len(axes)):
-        fig.delaxes(axes[j])
+            # heatmap 출력
+            ax = axes[row, col]
+            sns.heatmap(
+                shap_matrix.T, cmap="coolwarm", center=0,
+                xticklabels=[f"T{i}" for i in range(SEQ_LEN)],
+                yticklabels=FEATURE_COLUMNS,
+                ax=ax
+            )
+            ax.set_title(f"{code} | {buy_date.date()} | 수익률: {profit_pct:.2%}")
 
     plt.tight_layout()
     heatmap_path = os.path.join(OUTPUT_DIR, "shap_heatmap.png")
