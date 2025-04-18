@@ -2,14 +2,13 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Top Picks</title>
+  <title>SK hynix Inc.</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     body {
       margin: 0;
       font-family: Arial, sans-serif;
       background-color: #3a3a3a;
-      color: white;
     }
     nav {
       display: flex;
@@ -18,6 +17,10 @@
       padding: 8px 24px;
       background-color: #ffffff;
       border-bottom: 1px solid #ccc;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
     }
     .nav-left img {
       height: 32px;
@@ -47,6 +50,16 @@
     .nav-links a:hover, .nav-links a.active {
       background-color: #c0c0c0;
     }
+
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+
     .dropdown {
       position: relative;
     }
@@ -74,40 +87,30 @@
     .dropdown:hover .dropdown-content {
       display: block;
     }
+
     .main {
       padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
     }
-    .page-title {
-      font-size: 32px;
-      margin-bottom: 30px;
-      font-family: 'DM Serif Display', serif;
+
+    .graph-section {
+      margin-bottom: 20px;
+      padding: 10px;
+      text-align: center;
     }
-    .company-table {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 20px;
+    .graph-section img {
+      width: 100%;
+      max-height: 250px;
+      object-fit: contain;
     }
-    .company-column {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .company-name {
+
+    .asset-text {
+      color: white;
       font-size: 14px;
       padding: 2px 6px;
-    }
-    .home-button {
-      background-color: #52545a !important;
-      color: white !important;
-    }
-    .home-button:hover {
-      background-color: white !important;
-      color: #52545a !important;
-    }
-    footer {
-      background-color: #ffffff;
-      height: 80px;
-      margin-top: 60px;
+      margin-top: 10px;
     }
   </style>
 </head>
@@ -115,19 +118,19 @@
   <nav>
     <div class="nav-left">
       <img src="{{ url_for('static', filename='seoultech-logo.png') }}" alt="SEOULTECH Logo">
-      <a href="{{ url_for('index') }}">StockLENS</a>
+      <a href="/">StockLENS</a>
     </div>
     <div class="nav-links">
-      <a href="{{ url_for('index') }}" class="home-button">Home</a>
-      <a href="{{ url_for('paper_trading') }}">Paper Trading</a>
-      <a href="{{ url_for('top_picks') }}">Top Picks</a>
+      <a href="/" class="home-button">Home</a>
+      <a href="/papertrading.html">Paper Trading</a>
+      <a href="/backtest.html">Backtest</a>
       <div class="dropdown">
         <a href="#">Forecasting ☰</a>
         <div class="dropdown-content">
           <a href="/samsung.html">Samsung Electronics</a>
           <a href="/skhynix.html">SK hynix</a>
           <a href="/lgenergy.html">LG Energy Solution</a>
-          <a href="/samsungbio">Samsung Biologics</a>
+          <a href="/samsungbio.html">Samsung Biologics</a>
           <a href="/hyundai.html">Hyundai Motors</a>
           <a href="/apple.html">Apple</a>
           <a href="/microsoft.html">Microsoft</a>
@@ -140,44 +143,18 @@
   </nav>
 
   <div class="main">
-    <div class="page-title">Top 200</div>
-    <div class="company-table">
-      <div class="company-column">
-        <!-- Company 1 to 50 -->
-        <div class="company-name">Company 1</div>
-        <div class="company-name">Company 2</div>
-        <div class="company-name">Company 3</div>
-        <div class="company-name">Company 4</div>
-        <!-- ... -->
-        <div class="company-name">Company 50</div>
-      </div>
-      <div class="company-column">
-        <!-- Company 51 to 100 -->
-        <div class="company-name">Company 51</div>
-        <div class="company-name">Company 52</div>
-        <div class="company-name">Company 53</div>
-        <!-- ... -->
-        <div class="company-name">Company 100</div>
-      </div>
-      <div class="company-column">
-        <!-- Company 101 to 150 -->
-        <div class="company-name">Company 101</div>
-        <div class="company-name">Company 102</div>
-        <div class="company-name">Company 103</div>
-        <!-- ... -->
-        <div class="company-name">Company 150</div>
-      </div>
-      <div class="company-column">
-        <!-- Company 151 to 200 -->
-        <div class="company-name">Company 151</div>
-        <div class="company-name">Company 152</div>
-        <div class="company-name">Company 153</div>
-        <!-- ... -->
-        <div class="company-name">Company 200</div>
-      </div>
-    </div>
-  </div>
+    <!-- 페이지 제목 -->
+    <h1 style="font-size: 32px; margin-bottom: 30px; font-family: 'DM Serif Display', serif; color: white;">
+      Backtest
+    </h1>
 
-  <footer></footer>
+    <div class="graph-section">
+      <!-- py에서 만든 png 그래프 파일 삽입 -->
+      <img src="{{ url_for('static', filename='total_assets.png') }}?t={{ timestamp }}" alt="Total Assets Graph">
+    </div>
+
+    <!-- py에서 동적으로 전달한 텍스트 삽입 -->
+    <div class="asset-text">write all_asset_text_here</div>
+  </div>
 </body>
 </html>
