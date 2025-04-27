@@ -34,7 +34,7 @@ MINMAX_COLS = [
 ]
 
 STANDARD_COLS = [ 
-    'Close_RET'
+    'Close_RET',
     #'Volatility_5',
     #'Momentum_2',
     #'Price_vs_MA20',
