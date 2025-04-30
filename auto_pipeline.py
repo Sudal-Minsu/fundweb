@@ -109,7 +109,7 @@ def run_auto_pipeline():
     else:
         print("감성 분석할 뉴스가 없습니다.")
 
-    print("일별 업종 평균 감성 점수 계산 및 저장")
+    print("일별 감성 점수 계산 및 저장")
     daily_averages = calculate_daily_avg_sentiment()
     save_daily_avg_to_mysql(daily_averages)
 
