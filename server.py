@@ -91,8 +91,14 @@ def rule_detail(rule_id):
             zipped_data=zipped_data,
             update_time=update_time
           )
+    
+@app.route('/ping')
+def ping():
+    return '서버는 살아있습니다.'
+
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
+    
