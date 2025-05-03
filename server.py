@@ -43,54 +43,54 @@ def get_auto_trading_summary():
 # 서버 실행 시 1회 실행
 #run_auto_pipeline()
 
-@app.route('/')
-def index():
-    total_profit, average_yield = get_auto_trading_summary()
-    rules[0]['profit'] = total_profit
-    rules[0]['yield'] = average_yield
-    return render_template('index.html', rules=rules)
+# @app.route('/')
+# def index():
+#     total_profit, average_yield = get_auto_trading_summary()
+#     rules[0]['profit'] = total_profit
+#     rules[0]['yield'] = average_yield
+#     return render_template('index.html', rules=rules)
 
-@app.route('/rule/<int:rule_id>')
-def rule_detail(rule_id):
-    rule = next((r for r in rules if r['id'] == rule_id), None)
+# @app.route('/rule/<int:rule_id>')
+# def rule_detail(rule_id):
+#     rule = next((r for r in rules if r['id'] == rule_id), None)
 
 
-    labels, scores, titles = [], [], []
+#     labels, scores, titles = [], [], []
     
-    if rule_id == 2:
-        try:
-            conn = pymysql.connect(**config.DB_CONFIG)
-            cursor = conn.cursor()
-            today = datetime.now().strftime('%Y-%m-%d')
-            cursor.execute("""
-                SELECT title, published_date, sentiment_score
-                FROM news
-                WHERE DATE(published_date) = %s
-                ORDER BY published_date DESC
-            """, (today,))
-            data = cursor.fetchall()
-            cursor.close()
-            conn.close()
+#     if rule_id == 2:
+#         try:
+#             conn = pymysql.connect(**config.DB_CONFIG)
+#             cursor = conn.cursor()
+#             today = datetime.now().strftime('%Y-%m-%d')
+#             cursor.execute("""
+#                 SELECT title, published_date, sentiment_score
+#                 FROM news
+#                 WHERE DATE(published_date) = %s
+#                 ORDER BY published_date DESC
+#             """, (today,))
+#             data = cursor.fetchall()
+#             cursor.close()
+#             conn.close()
 
-            labels = [row[1].strftime('%H:%M') for row in data]
-            scores = [row[2] for row in data]
-            titles = [row[0] for row in data]
-            update_time = datetime.now()
-        except Exception as e:
-            print("뉴스 데이터 조회 오류:", e)
+#             labels = [row[1].strftime('%H:%M') for row in data]
+#             scores = [row[2] for row in data]
+#             titles = [row[0] for row in data]
+#             update_time = datetime.now()
+#         except Exception as e:
+#             print("뉴스 데이터 조회 오류:", e)
 
-        zipped_data = zip(labels, titles, scores)
+#         zipped_data = zip(labels, titles, scores)
         
-        return render_template(
-            'rule_detail.html',
-            rule=rule,
-            rule_id=rule_id,
-            labels=labels,
-            scores=scores,
-            titles=titles,
-            zipped_data=zipped_data,
-            update_time=update_time
-          )
+#         return render_template(
+#             'rule_detail.html',
+#             rule=rule,
+#             rule_id=rule_id,
+#             labels=labels,
+#             scores=scores,
+#             titles=titles,
+#             zipped_data=zipped_data,
+#             update_time=update_time
+#           )
     
 @app.route('/ping')
 def ping():
