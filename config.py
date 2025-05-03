@@ -5,7 +5,7 @@ import keyring
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "1234",
+    "password": "0000",
     "database": "news_db",
     "port": 3306,
     "charset": "utf8mb4"

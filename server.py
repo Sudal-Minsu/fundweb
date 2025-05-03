@@ -36,12 +36,12 @@ def get_auto_trading_summary():
         return 0, 0
 
 # APScheduler를 사용한 백그라운드 작업 스케줄링
-scheduler = BackgroundScheduler()
-scheduler.add_job(run_auto_pipeline, 'interval', minutes=5)
-scheduler.start()
+#scheduler = BackgroundScheduler()
+#scheduler.add_job(run_auto_pipeline, 'interval', minutes=5)
+#scheduler.start()
 
 # 서버 실행 시 1회 실행
-run_auto_pipeline()
+#run_auto_pipeline()
 
 @app.route('/')
 def index():
@@ -53,8 +53,6 @@ def index():
 @app.route('/rule/<int:rule_id>')
 def rule_detail(rule_id):
     rule = next((r for r in rules if r['id'] == rule_id), None)
-    if rule is None:
-        return abort(404)
 
 
     labels, scores, titles = [], [], []
