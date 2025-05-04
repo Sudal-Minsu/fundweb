@@ -36,93 +36,69 @@ def get_auto_trading_summary():
         return 0, 0
 
 # APScheduler를 사용한 백그라운드 작업 스케줄링
-scheduler = BackgroundScheduler()
-scheduler.add_job(run_auto_pipeline, 'interval', minutes=5)
-scheduler.start()
+#scheduler = BackgroundScheduler()
+#scheduler.add_job(run_auto_pipeline, 'interval', minutes=5)
+#scheduler.start()
 
 # 서버 실행 시 1회 실행
-run_auto_pipeline()
+#run_auto_pipeline()
 
-@app.route('/')
-def index():
-    total_profit, average_yield = get_auto_trading_summary()
-    rules[0]['profit'] = total_profit
-    rules[0]['yield'] = average_yield
-    return render_template('index.html', rules=rules)
+# @app.route('/')
+# def index():
+#     total_profit, average_yield = get_auto_trading_summary()
+#     rules[0]['profit'] = total_profit
+#     rules[0]['yield'] = average_yield
+#     return render_template('index.html', rules=rules)
 
-@app.route('/rule/<int:rule_id>')
-def rule_detail(rule_id):
-    rule = next((r for r in rules if r['id'] == rule_id), None)
-    if rule is None:
-        return abort(404)
+# @app.route('/rule/<int:rule_id>')
+# def rule_detail(rule_id):
+#     rule = next((r for r in rules if r['id'] == rule_id), None)
 
 
-    labels, scores, titles = [], [], []
+#     labels, scores, titles = [], [], []
     
-    if rule_id == 2:
-        try:
-            conn = pymysql.connect(**config.DB_CONFIG)
-            cursor = conn.cursor()
-            today = datetime.now().strftime('%Y-%m-%d')
-            cursor.execute("""
-                SELECT title, published_date, sentiment_score
-                FROM news
-                WHERE DATE(published_date) = %s
-                ORDER BY published_date DESC
-            """, (today,))
-            data = cursor.fetchall()
-            cursor.close()
-            conn.close()
+#     if rule_id == 2:
+#         try:
+#             conn = pymysql.connect(**config.DB_CONFIG)
+#             cursor = conn.cursor()
+#             today = datetime.now().strftime('%Y-%m-%d')
+#             cursor.execute("""
+#                 SELECT title, published_date, sentiment_score
+#                 FROM news
+#                 WHERE DATE(published_date) = %s
+#                 ORDER BY published_date DESC
+#             """, (today,))
+#             data = cursor.fetchall()
+#             cursor.close()
+#             conn.close()
 
-            labels = [row[1].strftime('%H:%M') for row in data]
-            scores = [row[2] for row in data]
-            titles = [row[0] for row in data]
-            update_time = datetime.now()
-        except Exception as e:
-            print("뉴스 데이터 조회 오류:", e)
+#             labels = [row[1].strftime('%H:%M') for row in data]
+#             scores = [row[2] for row in data]
+#             titles = [row[0] for row in data]
+#             update_time = datetime.now()
+#         except Exception as e:
+#             print("뉴스 데이터 조회 오류:", e)
 
-        zipped_data = zip(labels, titles, scores)
+#         zipped_data = zip(labels, titles, scores)
         
-        return render_template(
-            'rule_detail.html',
-            rule=rule,
-            rule_id=rule_id,
-            labels=labels,
-            scores=scores,
-            titles=titles,
-            zipped_data=zipped_data,
-            update_time=update_time
-          )
+#         return render_template(
+#             'rule_detail.html',
+#             rule=rule,
+#             rule_id=rule_id,
+#             labels=labels,
+#             scores=scores,
+#             titles=titles,
+#             zipped_data=zipped_data,
+#             update_time=update_time
+#           )
+    
+@app.route('/ping')
+def ping():
+    return '서버는 살아있습니다.'
 
-@app.route('/api/news')
-def api_news():
-    try:
-        conn = pymysql.connect(**config.DB_CONFIG)
-        cursor = conn.cursor()
-        today = datetime.now().strftime('%Y-%m-%d')
-        cursor.execute("""
-            SELECT title, published_date, sentiment_score
-            FROM news
-            WHERE DATE(published_date) = %s
-            ORDER BY published_date DESC
-        """, (today,))
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        labels = [row[1].strftime('%H:%M') for row in data]
-        scores = [row[2] for row in data]
-        titles = [row[0] for row in data]
-
-        return {
-            "labels": labels,
-            "scores": scores,
-            "titles": titles
-        }
-    except Exception as e:
-        return {"error": str(e)}, 500
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
+    
