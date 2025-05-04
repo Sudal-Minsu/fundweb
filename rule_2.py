@@ -1,13 +1,13 @@
 # 데이터 관련 설정
 SEQ_LEN = 30             # 입력 시퀀스 길이 (일 단위)
 TRAIN_YEARS = 5          # 학습에 사용할 데이터 기간 (년 단위)
-TEST_PERIOD_DAYS = 90    # 백테스트 기간 (일 단위)
+TEST_PERIOD_DAYS = 365    # 백테스트 기간 (일 단위)
 RSI_n = 2                # RSI 계산에 사용할 기간 (n일)
 STOCK_NUMBER = 200        # 종목 수 (최대 200개)
 
 # 백테스트 시작 날짜 (사용자가 원하는 날짜로 수정 가능)
 import pandas as pd
-BACKTEST_START_DATE = pd.to_datetime("2024-11-05")          
+BACKTEST_START_DATE = pd.to_datetime("2024-04-05")          
 
 # 예측 파라미터 (n과 a)
 FUTURE_N = 0             # 몇 일 뒤의 종가를 기준으로 할지 (n일 뒤)
