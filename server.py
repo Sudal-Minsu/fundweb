@@ -21,6 +21,7 @@ def ping():
     return '서버는 살아있습니다.'
 
 
+
 # 🔹 Flask 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

@@ -10,7 +10,7 @@ import pymysql
 import sys
 from datetime import datetime
 from sklearn.linear_model import LinearRegression
-from config import get_api_keys, ACCOUNT_INFO, DB_CONFIG
+from config import ACCOUNT_INFO, DB_CONFIG
 
 # API 키
 app_key = keyring.get_password('mock_app_key', '진상원')
