@@ -1,34 +1,29 @@
-from functions import get_api_keys, get_access_token, get_hashkey
-from config import ACCOUNT_INFO
+from functions import get_api_keys, get_access_token, get_hashkey, fetch_and_save_trade, save_to_db, execute_order, get_auth_info
+from config import ACCOUNT_INFO, DB_CONFIG
 import requests
 import json
 
-url_base = "https://openapivts.koreainvestment.com:29443"
 
-app_key, app_secret =get_api_keys()
-access_token = get_access_token(url_base, app_key, app_secret)
 
-# 매수
-path = "/uapi/domestic-stock/v1/trading/order-cash"
-url = f"{url_base}/{path}"
-data = {
-    "CANO": ACCOUNT_INFO['CANO'],  # 계좌번호 앞 8지리
-    "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],  # 계좌번호 뒤 2자리
-    "PDNO": "005930",  # 종목코드
-    "ORD_DVSN": "01",  # 주문 방법
-    "ORD_QTY": "10",  # 주문 수량
-    "ORD_UNPR": "0",  # 주문 단가 (시장가의 경우 0)
-}
+app_key, app_secret, access_token = get_auth_info()
 
-headers = {
-    "Content-Type": "application/json",
-    "authorization": f"Bearer {access_token}",
-    "appKey": app_key,
-    "appSecret": app_secret,
-    "tr_id": "VTTC0802U",
-    "custtype": "P",
-    "hashkey": get_hashkey(url_base, app_key, app_secret, data)
-}
+order_no = execute_order(
+    stock_code="005930",
+    quantity=10,
+    order_type="매수",       
+    order_style="시장가",    
+    app_key=app_key,
+    app_secret=app_secret,
+    access_token=access_token
+)
 
-res = requests.post(url, headers=headers, data=json.dumps(data))
-res.json()
+if order_no:
+    fetch_and_save_trade(
+        order_type="매수",
+        order_no=order_no,
+        access_token=access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+        db_config=DB_CONFIG,
+        table_name="trade_breakout"
+    )
