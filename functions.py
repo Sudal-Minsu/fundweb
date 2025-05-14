@@ -7,6 +7,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from config import DB_CONFIG, ACCOUNT_INFO
 import keyring
+import os
 
 # 🔹 api key 불러오기
 def get_api_keys():
@@ -33,39 +34,36 @@ def get_access_token(app_key, app_secret):
 
 # 🔹 토큰 매니저
 def get_auth_info():
-    # ✅ 내부 정적 변수처럼 동작할 수 있도록 속성 저장
-    if not hasattr(get_auth_info, "_cache"):
-        get_auth_info._cache = {
-            "token": None,
-            "timestamp": 0,
-            "app_key": None,
-            "app_secret": None
-        }
+    TOKEN_FILE = "access_token.json"
+    # 캐시 파일이 있으면 읽기
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "r") as f:
+            cache = json.load(f)
+        if time.time() - cache["timestamp"] < 3600:
+            print("🟢 기존 토큰 재사용 중 (파일)")
+            return cache["app_key"], cache["app_secret"], cache["token"]
 
-    cache = get_auth_info._cache
-    now = time.time()
+    # 새로 발급
+    app_key, app_secret = get_api_keys()
+    access_token = get_access_token(app_key, app_secret)
+    cache = {
+        "token": access_token,
+        "timestamp": time.time(),
+        "app_key": app_key,
+        "app_secret": app_secret
+    }
 
-    # 토큰이 없거나 만료된 경우 새로 발급
-    if cache["token"] is None or now - cache["timestamp"] > 3600:
-        app_key, app_secret = get_api_keys()
-        access_token = get_access_token(app_key, app_secret)
+    with open(TOKEN_FILE, "w") as f:
+        json.dump(cache, f)
+    print("🔄 새로운 토큰 발급 완료")
+    return app_key, app_secret, access_token
 
-        cache["token"] = access_token
-        cache["timestamp"] = now
-        cache["app_key"] = app_key
-        cache["app_secret"] = app_secret
-
-        print("🔄 새로운 토큰 발급 완료")
-    else:
-        print("🟢 기존 토큰 재사용 중")
-
-    return cache["app_key"], cache["app_secret"], cache["token"]
 
 
 # 🔹 해시키 생성 함수
 def get_hashkey(app_key, app_secret, data):
     url_base = "https://openapivts.koreainvestment.com:29443"
-    path = "uapi/hashkey"
+    path = "/uapi/hashkey"
     url = f"{url_base}/{path}"
     
     headers = {
@@ -80,7 +78,7 @@ def get_hashkey(app_key, app_secret, data):
 # 🔹 현재 주가 조회 함수
 def get_current_price(access_token, app_key, app_secret, stock_code):
     url_base = "https://openapivts.koreainvestment.com:29443"
-    path = "uapi/domestic-stock/v1/quotations/inquire-price"
+    path = "/uapi/domestic-stock/v1/quotations/inquire-price"
     url = f"{url_base}/{path}"
 
     headers = {
@@ -143,63 +141,109 @@ def execute_order(stock_code, quantity, order_type, order_style, app_key, app_se
         "hashkey": get_hashkey(app_key, app_secret, data)
     }
 
-    res = requests.post(url, headers=headers, data=json.dumps(data)).json()
+    res = requests.post(url, headers=headers, data=json.dumps(data))
 
-    if res.get("rt_cd") == "0":
-        order_no = res["output"]["ORD_NO"]
-        print(f"✅ {order_type} 성공: 주문번호 {order_no}")
-        return order_no
+    try:
+        res_json = res.json()
+    except ValueError:
+        print("❌ JSON 응답 아님. 서버 응답 원문:")
+        print(res.text)
+        return None
+
+    if res_json.get("rt_cd") == "0":
+        output = res_json.get("output")
+        if isinstance(output, dict) and "ODNO" in output:
+            order_no = output["ODNO"]
+            print(f"✅ {order_type} 성공: 주문번호 {order_no}")
+            return order_no
+        else:
+            print(f"❌ {order_type} 실패: 주문번호 없음. output: {output}")
+            return None
     else:
-        print(f"❌ {order_type} 실패: {res.get('msg1')}")
+        print(f"❌ {order_type} 실패: {res_json.get('msg1')}")
         return None
 
 
+
+
 # 🔹 체결 내역 조회 + 저장 (매수/매도 공용)
-def fetch_and_save_trade(order_type, order_no, access_token, app_key, app_secret, db_config, table_name, profit=None, profit_rate=None):
+def fetch_and_save_trade(order_type, order_no, access_token, app_key, app_secret, db_config, table_name):
 
     url_base = "https://openapivts.koreainvestment.com:29443"
-    path = "/uapi/domestic-stock/v1/trading/order/inquire-psbl-order"
+    path = "/uapi/domestic-stock/v1/trading/inquire-ccn" 
     url = f"{url_base}{path}"
+
+    params = {
+        "CANO": ACCOUNT_INFO['CANO'],
+        "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],
+        "ORD_NO": order_no,
+        "INQR_DVSN": "00",  # 전체
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": ""
+    }
 
     headers = {
         "Content-Type": "application/json",
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
-        "tr_id": "VTTC0434R",  # 체결 조회용 tr_id (모의투자 기준)
-        "custtype": "P"
+        "tr_id": "VTTC0434R",  # 체결 조회 (모의투자용)
+        "custtype": "P",
+        "hashkey": get_hashkey(app_key, app_secret, params)
     }
-
-    params = {
-        "CANO": ACCOUNT_INFO['CANO'],
-        "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],
-        "INQR_DVSN": "02",      # 개별 주문조회
-        "ORD_NO": order_no,
-        "CNCL_DVSN": "00",
-        "INQR_DVSN_2": "00"
-    }
-
-    res = requests.get(url, headers=headers, params=params).json()
-
+    
     try:
-        item = res["output"][0]
-        stock_code = item["pdno"]
-        quantity = int(item["ord_qty"])
-        price = int(item["prcs_pr"])
-        trade_time = datetime.now()
-
-        save_to_db(
-            trade_table_name=table_name,
-            stock_code=stock_code,
-            order_type=order_type,  # 매수 or 매도
-            quantity=quantity,
-            price=price,
-            trade_time=trade_time,
-            profit=profit,
-            profit_rate=profit_rate
-        )
+        res = requests.get(url, headers=headers, params=params)
+        res_json = res.json()
     except Exception as e:
-        print(f"❌ 체결 조회 및 저장 실패: {e}")
+        print(f"❌ 체결 조회 실패: JSON 응답 아님 또는 서버 오류\n📦 응답 코드: {res.status_code}\n📦 응답 내용: {res.text[:300]}")
+        return
+
+    if res_json.get("rt_cd") != "0":
+        print(f"❌ 체결 API 실패: {res_json.get('msg1')}")
+        return
+
+    output = res_json.get("output", [])
+    if not output:
+        print("ℹ️ 체결 내역 없음 (아직 체결 전일 수 있음)")
+        return
+
+    saved = False  # ✅ 체결 저장 여부 추적용
+
+    for trade in output:
+        try:
+            stock_code = trade.get("PDNO")
+            quantity = int(trade.get("CNQTY", 0))
+            price = int(trade.get("CNPR", 0))
+            trade_time_raw = trade.get("CNTM", "")  # HHMMSS
+
+            # 시간 형식이 정확할 때만 변환
+            if len(trade_time_raw) == 6:
+                trade_time = datetime.now().replace(
+                    hour=int(trade_time_raw[:2]),
+                    minute=int(trade_time_raw[2:4]),
+                    second=int(trade_time_raw[4:6]),
+                    microsecond=0
+                )
+            else:
+                trade_time = datetime.now()  # fallback
+
+            save_to_db(
+                db_config=db_config,
+                trade_table_name=table_name,
+                stock_code=stock_code,
+                order_type=order_type,
+                quantity=quantity,
+                price=price,
+                trade_time=trade_time
+            )
+            saved = True  # ✅ 저장 성공 표시
+
+        except Exception as e:
+            print(f"❌ 체결 데이터 저장 중 오류: {e}")
+
+    return saved  # ✅ 최소 1건이라도 저장됐으면 True, 아니면 False
+
 
 
 # 🔹 수익률 그래프 함수
