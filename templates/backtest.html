@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Backtest 결과</title>
+  <title>Backtest</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     body {
@@ -66,20 +66,22 @@
       min-height: 600px;
     }
     .graph-section {
-      margin-bottom: 20px;
+      margin: 40px 0;
       padding: 10px;
       text-align: center;
     }
     .graph-section img {
       width: 100%;
-      max-height: 250px;
+      max-height: auto;
       object-fit: contain;
     }
     .asset-text {
       color: white;
-      font-size: 14px;
-      padding: 2px 6px;
-      margin-top: 10px;
+      font-size: 20px;
+      font-weight: bold;
+      text-align: center;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+      margin-top: 12px;
     }
     table {
       width: 100%;
@@ -98,46 +100,44 @@
     }
   </style>
 </head>
+
 <body>
   <nav>
     <div class="nav-left">
-      <img src="{{ url_for('static', filename='seoultech-logo.png') }}" alt="SEOULTECH Logo">
-      <a href="/">StockLENS</a>
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">|  Backtest</span>
     </div>
     <div class="nav-links">
-      <a href="/" class="home-button">Home</a>
-      <a href="/papertrading.html">Paper Trading</a>
-      <a href="/backtest.html">Backtest</a>
+      <a href="/home" class="home-button">Home</a>
+      <a href="/papertrading">Paper Trading</a>
+      <a href="/backtest" class="active">Backtest</a>
     </div>
   </nav>
 
   <div class="main">
-    <h1 style="font-size: 32px; margin-bottom: 30px; font-family: 'DM Serif Display', serif; color: white;">
-      Backtest
-    </h1>
-
     <div style="text-align: center; margin-bottom: 30px;">
       <button onclick="runBacktest()" style="padding: 10px 20px; font-size: 16px;">백테스트 실행</button>
     </div>
 
     <div class="graph-section">
-      <img id="asset" src="{{ url_for('static', filename='rule_2_결과/총 자산.png') }}?t={{ timestamp }}" alt="Total Assets Graph">
-      <div class="asset-text">총 자산 변화 추이</div>
+      <img id="asset" src="/external/총 자산.png?t={{ timestamp }}" alt="Total Assets Graph">
+      <div class="asset-text">&lt;총 자산 변화 추이&gt;</div>
     </div>
 
     <div class="graph-section">
-      <img id="top" src="{{ url_for('static', filename='rule_2_결과/상위 손실 곡선.png') }}?t={{ timestamp }}" alt="Top Loss Graph">
-      <div class="asset-text">상위 손실 종목</div>
+      <img id="top" src="/external/상위 손실 곡선.png?t={{ timestamp }}" alt="Top Loss Graph">
+      <div class="asset-text">&lt;상위 손실 종목&gt;</div>
     </div>
 
     <div class="graph-section">
-      <img id="bottom" src="{{ url_for('static', filename='rule_2_결과/하위 손실 곡선.png') }}?t={{ timestamp }}" alt="Bottom Loss Graph">
-      <div class="asset-text">하위 손실 종목</div>
+      <img id="bottom" src="/external/하위 손실 곡선.png?t={{ timestamp }}" alt="Bottom Loss Graph">
+      <div class="asset-text">&lt;하위 손실 종목&gt;</div>
     </div>
 
     <div class="graph-section">
-      <img id="shap" src="{{ url_for('static', filename='rule_2_결과/shap_heatmap.png') }}?t={{ timestamp }}" alt="SHAP Heatmap">
-      <div class="asset-text">SHAP 해석 결과</div>
+      <img id="shap" src="/external/shap_heatmap.png?t={{ timestamp }}" alt="SHAP Heatmap">
+      <div class="asset-text">&lt;SHAP 해석 결과&gt;</div>
     </div>
 
     {% if score_table %}
@@ -146,15 +146,25 @@
       <thead>
         <tr>
           {% for col in score_table[0].keys() %}
-          <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">{% if col == 'code' %}종목코드{% elif col == 'total_trades' %}총 거래수{% elif col == 'successful_trades' %}성공 거래수{% elif col == 'success_rate' %}성공률{% elif col == 'avg_profit_pct' %}평균 수익률{% elif col == 'buy_date' %}매수일{% elif col == 'sell_date' %}매도일{% elif col == 'buy_price' %}매수가{% elif col == 'sell_price' %}매도가{% elif col == 'profit_pct' %}수익률{% elif col == 'success' %}성공여부{% elif col == 'sell_reason' %}매도 사유{% elif col == 'qty' %}수량{% else %}{{ col }}{% endif %}</th>
+          <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
+            {% if col == 'code' %}종목코드
+            {% elif col == 'precision' %}정밀도
+            {% elif col == 'recall' %}재현율
+            {% elif col == 'f1_score' %}F1 점수
+            {% elif col == 'train_loss' %}학습 손실
+            {% elif col == 'val_loss' %}검증 손실
+            {% else %}{{ col }}
+            {% endif %}
+          </th>
           {% endfor %}
+
         </tr>
       </thead>
       <tbody>
         {% for row in score_table %}
         <tr>
           {% for val in row.values() %}
-          {% if (loop.parent.loop.index0 == 3 or loop.parent.loop.index0 == 4) and val is number %}<td style="white-space: nowrap; font-size: 13px; color: {% if (val * 100) < 0 %}#ff6b6b{% else %}#81ecec{% endif %};">{{ (val * 100) | round(2) }}%</td>{% else %}{% if col == 'success' %}<td style="white-space: nowrap; font-size: 13px;">{% if val == True %}✔️{% elif val == False %}✖️{% else %}{{ val }}{% endif %}</td>{% else %}<td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>{% endif %}{% endif %}
+          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
           {% endfor %}
         </tr>
         {% endfor %}
@@ -168,15 +178,24 @@
       <thead>
         <tr>
           {% for col in success_rate_table[0].keys() %}
-          <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">{% if col == 'code' %}종목코드{% elif col == 'total_trades' %}총 거래수{% elif col == 'successful_trades' %}성공 거래수{% elif col == 'success_rate' %}성공률{% elif col == 'avg_profit_pct' %}평균 수익률{% elif col == 'buy_date' %}매수일{% elif col == 'sell_date' %}매도일{% elif col == 'buy_price' %}매수가{% elif col == 'sell_price' %}매도가{% elif col == 'profit_pct' %}수익률{% elif col == 'success' %}성공여부{% elif col == 'sell_reason' %}매도 사유{% elif col == 'qty' %}수량{% else %}{{ col }}{% endif %}</th>
+            <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
+              {% if col == 'code' %}종목코드
+              {% elif col == 'total_trades' %}총 거래 수
+              {% elif col == 'successful_trades' %}성공 거래 수
+              {% elif col == 'success_rate' %}성공률
+              {% elif col == 'avg_profit_pct' %}평균 수익률
+              {% else %}{{ col }}
+              {% endif %}
+            </th>
           {% endfor %}
+
         </tr>
       </thead>
       <tbody>
         {% for row in success_rate_table %}
         <tr>
           {% for val in row.values() %}
-          {% if (loop.parent.loop.index0 == 3 or loop.parent.loop.index0 == 4) and val is number %}<td style="white-space: nowrap; font-size: 13px; color: {% if (val * 100) < 0 %}#1e90ff{% else %}#ff4d4d{% endif %};">{{ (val * 100) | round(2) }}%</td>{% else %}<td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>{% endif %}
+          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
           {% endfor %}
         </tr>
         {% endfor %}
@@ -189,8 +208,20 @@
     <table>
       <thead>
         <tr>
-          {% for col in trade_log_table[0].keys() %}
-          <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">{% if col == 'code' %}종목코드{% elif col == 'total_trades' %}총 거래수{% elif col == 'successful_trades' %}성공 거래수{% elif col == 'success_rate' %}성공률{% elif col == 'avg_profit_pct' %}평균 수익률{% elif col == 'buy_date' %}매수일{% elif col == 'sell_date' %}매도일{% elif col == 'buy_price' %}매수가{% elif col == 'sell_price' %}매도가{% elif col == 'profit_pct' %}수익률{% elif col == 'success' %}성공여부{% elif col == 'sell_reason' %}매도 사유{% elif col == 'qty' %}수량{% else %}{{ col }}{% endif %}</th>
+                    {% for col in trade_log_table[0].keys() %}
+            <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
+              {% if col == 'code' %}종목코드
+              {% elif col == 'buy_date' %}매수일
+              {% elif col == 'buy_price' %}매수가
+              {% elif col == 'qty' %}수량
+              {% elif col == 'sell_date' %}매도일
+              {% elif col == 'sell_price' %}매도가
+              {% elif col == 'profit_pct' %}수익률(%)
+              {% elif col == 'success' %}성공 여부
+              {% elif col == 'sell_reason' %}매도 사유
+              {% else %}{{ col }}
+              {% endif %}
+            </th>
           {% endfor %}
         </tr>
       </thead>
@@ -198,7 +229,7 @@
         {% for row in trade_log_table %}
         <tr>
           {% for val in row.values() %}
-          {% if (loop.parent.loop.index0 == 3 or loop.parent.loop.index0 == 4) and val is number %}<td style="white-space: nowrap; font-size: 13px; color: {% if (val * 100) < 0 %}#1e90ff{% else %}#ff4d4d{% endif %};">{{ (val * 100) | round(2) }}%</td>{% else %}<td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>{% endif %}
+          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
           {% endfor %}
         </tr>
         {% endfor %}
@@ -218,12 +249,12 @@
         .then(data => {
           if (data.status === "ok") {
             const now = Date.now();
-            document.getElementById("asset").src = `/static/rule_2_결과/총 자산.png?t=${now}`;
-            document.getElementById("top").src = `/static/rule_2_결과/상위 손실 곡선.png?t=${now}`;
-            document.getElementById("bottom").src = `/static/rule_2_결과/하위 손실 곡선.png?t=${now}`;
-            document.getElementById("shap").src = `/static/rule_2_결과/shap_heatmap.png?t=${now}`;
+            document.getElementById("asset").src = `/external/총 자산.png?t=${now}`;
+            document.getElementById("top").src = `/external/상위 손실 곡선.png?t=${now}`;
+            document.getElementById("bottom").src = `/external/하위 손실 곡선.png?t=${now}`;
+            document.getElementById("shap").src = `/external/shap_heatmap.png?t=${now}`;
             alert("백테스트 완료!");
-            location.reload();  // 성능 지표 테이블도 다시 보여주기 위해 전체 새로고침
+            location.reload();
           } else {
             alert("오류 발생: " + data.message);
           }

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>StockLENS Home</title>
+  <title>StockLENS</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     body {
@@ -60,7 +60,7 @@
     }
     .home-main {
       background-color: #003399;
-      height: 500px;
+      height: 90vh;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -86,13 +86,13 @@
 <body>
   <nav>
     <div class="nav-left">
-      <img src="seoultech-logo.png" alt="SEOULTECH Logo">
-      <a href="home.html">StockLENS</a>
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
     </div>
     <div class="nav-links">
-      <a href="home.html" class="home-button">Home</a>
-      <a href="papertrading.html">Paper Trading</a>
-      <a href="backtest.html">Backtest</a>
+      <a href="/home" class="home-button">Home</a>
+      <a href="/papertrading">Paper Trading</a>
+      <a href="/backtest">Backtest</a>
     </div>
   </nav>
 
