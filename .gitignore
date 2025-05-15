@@ -1,4 +1,5 @@
 log.txt
 config.py
 .ssh/
-__pychche__/
+__pycache__/
+*.pyc
