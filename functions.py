@@ -199,7 +199,7 @@ def check_account(access_token, app_key, app_secret):
             "CTX_AREA_FK100": '',
             "CTX_AREA_NK100": CTX_AREA_NK100
         }
-
+        print(url, headers, params)
         res = requests.get(url, headers=headers, params=params)
         print(res.content)
         output1.append(pd.DataFrame.from_records(res.json()['output1']))
