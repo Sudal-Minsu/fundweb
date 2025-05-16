@@ -14,7 +14,7 @@ import pandas_datareader.data as web
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
-start_date = today - datetime.timedelta(days=365 * 5)  
+start_date = today - datetime.timedelta(days=365 * 10)  
 
 
 """ MySQL DB 연결 함수 """
@@ -98,8 +98,8 @@ def get_top_200_codes():
     for code in tqdm(top_codes_pool, desc="조건 필터링 중"):
         try:
             df_stock = fdr.DataReader(code, start_date, today)
-            # 데이터가 200일 이상 있어야 함 (3년치면 보통 750일 이상)
-            if len(df_stock) >= 200:
+            # 데이터가 1000일 이상 있어야 함 (10년치면 보통 1250일 이상)
+            if len(df_stock) >= 1000:
                 # 최근 100일 데이터 추출
                 recent_100 = df_stock.tail(100)
                 # 최근 100일 중 거래량 결측 또는 1 이하인 날이 50일 초과면 제외
@@ -121,7 +121,7 @@ def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
         df.reset_index(inplace=True)
-        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']]  
+        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']] 
         df['Code'] = code
 
         conn = get_connection()
@@ -241,8 +241,8 @@ def run_stock_data():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 3년 이전 데이터 삭제
-    cutoff_date = today - datetime.timedelta(days=365 * 5)
+    # 이전 데이터 삭제
+    cutoff_date = today - datetime.timedelta(days=365 * 10)
     cursor.execute("DELETE FROM stock_data WHERE Date < %s", (cutoff_date,))
     conn.commit()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
