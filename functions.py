@@ -201,8 +201,9 @@ def check_account(access_token, app_key, app_secret):
         }
 
         res = requests.get(url, headers=headers, params=params)
+        print(res.content)
         output1.append(pd.DataFrame.from_records(res.json()['output1']))
-
+        
         CTX_AREA_NK100 = res.json()['ctx_area_nk100'].strip()
 
         if CTX_AREA_NK100 == '':
@@ -219,7 +220,7 @@ def check_account(access_token, app_key, app_secret):
         res1 = pd.DataFrame(columns=['종목코드', '보유수량', '매입단가'])
 
     res2 = output2[0]
-
+    
     return [res1, res2]
 
 
