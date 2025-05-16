@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 
 def auto_trading_loop(
-    stock_code, interval_sec=60, db_path="news_db", table_name="trade_history"
+    stock_code, interval_sec=60, db_path="trading_db", table_name="trade_history"
 ):
     app_key, app_secret, access_token = get_auth_info()
 
