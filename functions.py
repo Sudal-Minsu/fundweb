@@ -251,6 +251,7 @@ def save_to_db(trade_table_name, stock_code, order_type, quantity, price, trade_
     try:
         conn = pymysql.connect(**DB_CONFIG)
         cursor = conn.cursor()
+    
         
         # 테이블이 없으면 생성
         cursor.execute(f"""
