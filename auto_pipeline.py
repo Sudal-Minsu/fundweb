@@ -20,7 +20,7 @@ def create_database_if_not_exists():
     conn = pymysql.connect(**db_config_no_db)
     cursor = conn.cursor()
     # 기본 문자 인코딩, 정렬 및 문자열 비교 설정
-    cursor.execute("CREATE DATABASE IF NOT EXISTS news_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+    cursor.execute("CREATE DATABASE IF NOT EXISTS trading_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
     conn.commit()
     cursor.close()
     conn.close()

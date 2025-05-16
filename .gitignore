@@ -1,5 +1,6 @@
 log.txt
 config.py
 .ssh/
+access_token.json
 __pycache__/
 *.pyc

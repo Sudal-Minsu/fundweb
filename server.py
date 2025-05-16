@@ -1,24 +1,36 @@
 from flask import Flask, render_template, abort, jsonify, request, send_from_directory, redirect
 import os
 import pymysql
-import config
+from config import DB_CONFIG
 import pandas as pd
 from datetime import datetime
 from auto_pipeline import run_auto_pipeline
 from apscheduler.schedulers.background import BackgroundScheduler
+from rule_3 import auto_trading_loop
+import threading
+from functions import read_trades_mysql
 
 app = Flask(__name__)
 
-# 투자 규칙 데이터
-rules = [
-    {'id': 1, 'name': '랜덤자동매매', 'profit': 0, 'yield': 0},
-    {'id': 2, 'name': '규칙 2', 'profit': -150, 'yield': -4.2},
-    {'id': 3, 'name': '규칙 3', 'profit': 100, 'yield': 3.0}
-]
+trading_thread = None
+
+
+def run_trading_loop():
+    auto_trading_loop("005930", interval_sec=60)
 
 @app.route('/ping')
 def ping():
-    return '서버는 살아있습니다.'
+    global trading_thread
+    if trading_thread is None or not trading_thread.is_alive():
+        trading_thread = threading.Thread(target=run_trading_loop)
+        trading_thread.daemon = True
+        trading_thread.start()
+
+    # ✅ 거래 로그 읽어오기
+    df = read_trades_mysql("trade_history")
+    trades = df.to_dict(orient='records')
+
+    return render_template("ping.html", trades=trades)
 
 @app.route('/backtest')
 def backtest():

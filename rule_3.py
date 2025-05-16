@@ -1,38 +1,58 @@
-from functions import get_api_keys, get_access_token, get_hashkey, fetch_and_save_trade, save_to_db, execute_order, get_auth_info
+from functions import get_api_keys, get_access_token, get_hashkey, save_to_db, execute_order, get_auth_info, check_account
 from config import ACCOUNT_INFO, DB_CONFIG
 import requests, json, time
 from datetime import datetime
 
 
 
-# app_key, app_secret, access_token = get_auth_info()
+import time
+from datetime import datetime
 
-# order_no = execute_order(
-#     stock_code="005930",
-#     quantity=10,
-#     order_type="매수",       
-#     order_style="시장가",    
-#     app_key=app_key,
-#     app_secret=app_secret,
-#     access_token=access_token
-# )
-app_key, app_secret = get_api_keys()
-access_token = get_access_token(app_key, app_secret)
+def auto_trading_loop(
+    stock_code, interval_sec=60, db_path="trading_db", table_name="trade_history"
+):
+    app_key, app_secret, access_token = get_auth_info()
 
-order_no = '0000010634'
-if order_no:
-    print("⏳ 체결 대기 중...")
+    while True:
+        print(f"\n🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 매매 시도")
 
-    for attempt in range(5):  # 최대 5번 시도 (약 15초)
-        success = fetch_and_save_trade('매수', order_no, access_token, app_key, app_secret, DB_CONFIG, '돌파매매')
-        if success:
-            print("✅ 체결 후 저장 완료!")
-            break
-        else:
-            with open("unfilled_orders.log", "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now()} - 체결 실패: 주문번호 {order_no}\n")
-            print("⏱ 아직 체결되지 않음, 다시 시도 중...")
-            
-            time.sleep(3)
-    else:
-        print("❌ 체결되지 않아서 저장 실패")
+        # 1. 주문 실행
+        quantity = 10
+        order_type = "매수"
+        order_style = "시장가"
+        price = None  # 시장가
+
+        order_no = execute_order(
+            stock_code=stock_code,
+            quantity=quantity,
+            order_type=order_type,
+            order_style=order_style,
+            app_key=app_key,
+            app_secret=app_secret,
+            access_token=access_token
+        )
+
+        time.sleep(3)  # 체결 대기 시간 (시장가면 빠르게 가능)
+
+        # 2. 잔고 및 수익 확인
+        res1, res2 = check_account(access_token, app_key, app_secret)
+
+
+        profit = int(res2['asst_icdc_amt'])
+        profit_rate = float(res2['asst_icdc_erng_rt']) * 100
+        trade_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # 3. DB 저장
+        save_to_db(
+            trade_table_name=table_name,
+            stock_code=stock_code,
+            order_type=order_type,
+            quantity=quantity,
+            price=price,
+            trade_time=trade_time,
+            profit=profit,
+            profit_rate=profit_rate
+        )
+
+        # 4. 다음 매매까지 대기
+        time.sleep(interval_sec)

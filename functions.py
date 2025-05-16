@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from config import DB_CONFIG, ACCOUNT_INFO
 import keyring
 import os
+import pandas as pd
 
 # 🔹 api key 불러오기
 def get_api_keys():
@@ -166,83 +167,60 @@ def execute_order(stock_code, quantity, order_type, order_style, app_key, app_se
 
 
 
-# 🔹 체결 내역 조회 + 저장 (매수/매도 공용)
-def fetch_and_save_trade(order_type, order_no, access_token, app_key, app_secret, db_config, table_name):
+def check_account(access_token, app_key, app_secret):
 
+    output1 = []
+    output2 = []
+    CTX_AREA_NK100 = ''
     url_base = "https://openapivts.koreainvestment.com:29443"
-    path = "/uapi/domestic-stock/v1/trading/inquire-ccn" 
-    url = f"{url_base}{path}"
+    while True:
 
-    params = {
-        "CANO": ACCOUNT_INFO['CANO'],
-        "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],
-        "ORD_NO": order_no,
-        "INQR_DVSN": "00",  # 전체
-        "CTX_AREA_FK100": "",
-        "CTX_AREA_NK100": ""
-    }
+        path = "/uapi/domestic-stock/v1/trading/inquire-balance"
+        url = f"{url_base}/{path}"
 
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key,
-        "appSecret": app_secret,
-        "tr_id": "VTTC0434R",  # 체결 조회 (모의투자용)
-        "custtype": "P",
-        "hashkey": get_hashkey(app_key, app_secret, params)
-    }
-    
-    try:
+        headers = {
+            "Content-Type": "application/json",
+            "authorization": f"Bearer {access_token}",
+            "appKey": app_key,
+            "appSecret": app_secret,
+            "tr_id": "VTTC8434R"
+        }
+
+        params = {
+            "CANO": ACCOUNT_INFO['CANO'],
+            "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],
+            "AFHR_FLPR_YN": "N",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "01",
+            "PRCS_DVSN": "00",
+            "CTX_AREA_FK100": '',
+            "CTX_AREA_NK100": CTX_AREA_NK100
+        }
+
         res = requests.get(url, headers=headers, params=params)
-        res_json = res.json()
-    except Exception as e:
-        print(f"❌ 체결 조회 실패: JSON 응답 아님 또는 서버 오류\n📦 응답 코드: {res.status_code}\n📦 응답 내용: {res.text[:300]}")
-        return
+        output1.append(pd.DataFrame.from_records(res.json()['output1']))
 
-    if res_json.get("rt_cd") != "0":
-        print(f"❌ 체결 API 실패: {res_json.get('msg1')}")
-        return
+        CTX_AREA_NK100 = res.json()['ctx_area_nk100'].strip()
 
-    output = res_json.get("output", [])
-    if not output:
-        print("ℹ️ 체결 내역 없음 (아직 체결 전일 수 있음)")
-        return
+        if CTX_AREA_NK100 == '':
+            output2.append(res.json()['output2'][0])
+            break
 
-    saved = False  # ✅ 체결 저장 여부 추적용
+    if not output1[0].empty:
+        res1 = pd.concat(output1)[['pdno', 'hldg_qty', 'pchs_avg_pric']].rename(columns={
+            'pdno': '종목코드',
+            'hldg_qty': '보유수량',
+            'pchs_avg_pric': '매입단가'
+        }).reset_index(drop=True)
+    else:
+        res1 = pd.DataFrame(columns=['종목코드', '보유수량', '매입단가'])
 
-    for trade in output:
-        try:
-            stock_code = trade.get("PDNO")
-            quantity = int(trade.get("CNQTY", 0))
-            price = int(trade.get("CNPR", 0))
-            trade_time_raw = trade.get("CNTM", "")  # HHMMSS
+    res2 = output2[0]
 
-            # 시간 형식이 정확할 때만 변환
-            if len(trade_time_raw) == 6:
-                trade_time = datetime.now().replace(
-                    hour=int(trade_time_raw[:2]),
-                    minute=int(trade_time_raw[2:4]),
-                    second=int(trade_time_raw[4:6]),
-                    microsecond=0
-                )
-            else:
-                trade_time = datetime.now()  # fallback
-
-            save_to_db(
-                db_config=db_config,
-                trade_table_name=table_name,
-                stock_code=stock_code,
-                order_type=order_type,
-                quantity=quantity,
-                price=price,
-                trade_time=trade_time
-            )
-            saved = True  # ✅ 저장 성공 표시
-
-        except Exception as e:
-            print(f"❌ 체결 데이터 저장 중 오류: {e}")
-
-    return saved  # ✅ 최소 1건이라도 저장됐으면 True, 아니면 False
+    return [res1, res2]
 
 
 
@@ -289,11 +267,12 @@ def save_to_db(trade_table_name, stock_code, order_type, quantity, price, trade_
         """)
         conn.commit()
         
-        sql = """
-        INSERT INTO trade_history (stock_code, order_type, quantity, price, trade_time, profit, profit_rate)
+        sql = f"""
+        INSERT INTO {trade_table_name} (stock_code, order_type, quantity, price, trade_time, profit, profit_rate)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         cursor.execute(sql, (stock_code, order_type, quantity, price, trade_time, profit, profit_rate))
+
         conn.commit()
         cursor.close()
         conn.close()
@@ -301,6 +280,24 @@ def save_to_db(trade_table_name, stock_code, order_type, quantity, price, trade_
     except Exception as e:
         print(f"❌ MySQL 저장 오류: {e}")
 
+
+def read_trades_mysql(table_name):
+    # DB 연결
+    conn = pymysql.connect(**DB_CONFIG)
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    # 거래 로그 조회 쿼리
+    query = f"SELECT * FROM {table_name} ORDER BY id DESC"
+    cursor.execute(query)
+    result = cursor.fetchall()
+
+    # pandas DataFrame 변환
+    df = pd.DataFrame(result)
+
+    # 종료
+    cursor.close()
+    conn.close()
+    return df
 
 
 
