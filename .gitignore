@@ -2,3 +2,4 @@ log.txt
 config.py
 .ssh/
 __pychche__/
+access_token.json
