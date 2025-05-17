@@ -731,32 +731,6 @@ def trade_log_csv(stock_models, filename="매매 로그.csv"):
         df = df.sort_values(by='buy_date')  # buy_date 기준으로 오름차순 정렬
     df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding='utf-8-sig')
     
-# 종목별 성능 지표 저장
-def score_csv(stock_models, filename="성능 지표.csv"):
-    records = []
-    for code, data in stock_models.items():
-        true = data.get('true', [])
-        pred = data.get('pred', [])
-
-        # None 값 필터링
-        filtered = [(t, p) for t, p in zip(true, pred) if t is not None and p is not None]
-        if not filtered:
-            continue
-
-        true_filtered, pred_filtered = zip(*filtered) # 각각 true만, pred만 따로 묶기
-
-        precision = precision_score(true_filtered, pred_filtered, average='macro', zero_division=0)
-        recall = recall_score(true_filtered, pred_filtered, average='macro', zero_division=0)
-        f1 = f1_score(true_filtered, pred_filtered, average='macro', zero_division=0)
-        records.append({
-            'code': code,
-            'precision': round(precision, 4),
-            'recall': round(recall, 4),
-            'f1_score': round(f1, 4)
-        })
-    pd.DataFrame(records).sort_values(by='f1_score', ascending=False).to_csv(
-        os.path.join(OUTPUT_DIR, filename), index=False, encoding='utf-8-sig'
-    )
 
 # 백테스트 기간 Confusion Matrix
 def plot_score(stock_models, filename="backtest_matrix.png"):
@@ -807,7 +781,6 @@ def main():
 
     # 7) 결과 저장
     plot_backtest_results(test_dates, portfolio_values)
-    score_csv(stock_models)
     plot_score(stock_models)
     trade_log_csv(stock_models)
     
