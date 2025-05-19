@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.font_manager as fm
-import seaborn as sns
 from tqdm import tqdm
 from sqlalchemy import create_engine
 import torch
@@ -12,29 +11,27 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix
 from joblib import Parallel, delayed
 import multiprocessing as mp
 from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
 SEQ_LEN = 5
-TRAIN_YEARS = 10
-TEST_PERIOD_DAYS = 20
-FUTURE_N = 0
-TARGET_PERCENT = 0.02
-LEARNING_RATE = 0.002
-EPOCHS = 3
+TRAIN_YEARS = 12
+TEST_PERIOD_DAYS = 60
+TARGET_PERCENT = 0.01
+LEARNING_RATE = 0.001
+EPOCHS = 20
 BATCH_SIZE = 32
 INITIAL_CAPITAL = 100_000_000
 BUY_PROB_THRESHOLD = 0.7
 SELL_PROB_THRESHOLD = 0.7
 TOP_N_FOR_BUY = 3
 BOTTOM_N_FOR_SELL_RANK = 190
-RSI_n = 2
 FEE_RATE = 0.000140527
 TAX_RATE = 0.0015
-BACKTEST_START_DATE = pd.to_datetime("2024-09-05")
+BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 STOCK_NUMBER = 200
 
 # 병렬 설정
@@ -80,6 +77,7 @@ STANDARD_COLS = [
     'MA_20_slope',
     'MA_20_slope_norm',
     'MA5_MA20_gap',
+    'MA5_vs_MA20_Gap',
     'MA_std_5_10_20', 
     # 변동성
     'Volatility_5',
@@ -108,7 +106,7 @@ STANDARD_COLS = [
 
 MINMAX_COLS = [
     # 레벨 값
-    'Close_shifted',
+    'Close',
     'LogVolume',
     'TradingValue',
     'TradingValue_Ratio', 
@@ -206,7 +204,7 @@ def engineer_features(df):
     df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
     df['LogVolume'] = np.log1p(df['Volume'])
     df['TradingValue'] = df['Close'] * df['Volume']
-    df['Close_shifted'] = df['Close']
+    df['Close'] = df['Close']
     df['Close_RET'] = df['Close'].pct_change().fillna(0)
 
     # --- 거시 경제 변수 전처리 ---
@@ -261,7 +259,7 @@ def engineer_features(df):
     df['MA5_vs_MA20_Gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
 
     # --- RSI ---
-    df['RSI_n'] = compute_rsi(df['Close'], RSI_n)
+    df['RSI_n'] = compute_rsi(df['Close'], 2)
     df['RSI_Slope'] = df['RSI_n'].diff().fillna(0)
     df['RSI_normal_zone'] = ((df['RSI_n'] >= 30) & (df['RSI_n'] <= 70)).astype(int)
     df['RSI_oversold'] = (df['RSI_n'] < 30).astype(int)
@@ -310,8 +308,6 @@ def engineer_features(df):
     # --- 반등 시나리오 ---
     df['Rebound_from_low'] = ((df['Price_near_low_20d'] == 1) & (df['Close_RET'] > 0)).astype(int)
     
-    # 1일 shift
-    df[FEATURE_COLUMNS] = df[FEATURE_COLUMNS].shift(1)
     # 결측값 제거
     df.dropna(subset=FEATURE_COLUMNS, inplace=True)
     # 날짜 기준으로 오름차순 정렬
@@ -319,13 +315,13 @@ def engineer_features(df):
     return df
 
 # ------------------- 시퀀스 생성 함수 -------------------
-def prepare_sequences(features, close_prices, future_n, target_percent):
+def prepare_sequences(features, close_prices, target_percent):
     sequences, targets = [], []
-    max_i = len(features) - SEQ_LEN - future_n + 1
+    max_i = len(features) - SEQ_LEN 
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 3] # 2일 전
-        future_price = close_prices[i + SEQ_LEN - 1 + future_n] # 오늘
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
+        future_price = close_prices[i + SEQ_LEN] # 오늘
         if future_price >= base_price * (1 + target_percent):
             label = 0  # 상승
         elif future_price <= base_price * (1 - target_percent):
@@ -338,105 +334,118 @@ def prepare_sequences(features, close_prices, future_n, target_percent):
 
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
-    def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None):
+    def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None, mask_scale=0.3):
         super().__init__()
-        self.input_size = input_size              # 입력 feature 수
-        self.hidden_size = hidden_size            # GRU의 hidden state 크기
-        self.seq_len = SEQ_LEN                    # 시계열 길이 (외부에서 정의되어야 함)
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.seq_len = SEQ_LEN
 
-        # 제거할 피처 인덱스 리스트
         self.drop_features = drop_features if drop_features is not None else []
+        self.mask_scale = mask_scale
 
-        # Selective dropout: 특정 feature만 dropout
-        self.selective_dropout = nn.Dropout(p=dropout)
+        self.global_dropout = nn.Dropout(p=dropout)
 
-        # Global dropout: GRU → FC 층 사이에서 사용
-        self.global_dropout = nn.Dropout(p=0.2)
-
-        # GRU: 시계열 데이터를 처리하는 순환 신경망
         self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
+        self.layernorm = nn.LayerNorm(hidden_size)  # LayerNorm 추가
 
-        # Fully connected layers
-        self.fc1 = nn.Linear(hidden_size, 32)     # GRU 출력 → 중간 표현
-        self.gelu = nn.GELU()                     # 활성화 함수 (비선형성 부여)
-        self.fc2 = nn.Linear(32, 2)               # 최종 출력 (2 클래스: 예를 들면 하락/상승)
+        self.fc1 = nn.Linear(hidden_size, 32)
+        self.gelu = nn.GELU()
+        self.fc2 = nn.Linear(32, 2)
 
     def forward(self, x):
         # x shape: (batch_size, seq_len, feature_dim)
 
-        # 특정 feature에만 dropout 적용 (feature-wise selective dropout)
         if self.drop_features:
-            x = x.clone()  # in-place 연산 방지 (gradient 안전성 확보)
-            for idx in self.drop_features: # dropout을 적용할 feature 인덱스 리스트
-                x[:, :, idx] = self.selective_dropout(x[:, :, idx])
+            x = x.clone()
+            for idx in self.drop_features:
+                x[:, :, idx] = x[:, :, idx] * self.mask_scale
 
-        # GRU에 입력: (batch_size, seq_len, input_size)
-        out, _ = self.gru(x)
-
-        # 시계열의 마지막 시점 출력만 사용
-        out = out[:, -1, :]  # shape: (batch_size, hidden_size)
-
-        # FC layers를 통해 분류
-        out = self.fc1(out)           # shape: (batch_size, 32)
-        out = self.gelu(out)          # 비선형 활성화
-        out = self.global_dropout(out)  # 일반 dropout
-        out = self.fc2(out)           # shape: (batch_size, 2)
-
+        out, _ = self.gru(x)             # (batch, seq_len, hidden_size)
+        out = out[:, -1, :]              # 마지막 시점만
+        out = self.layernorm(out)        # LayerNorm 적용
+        out = self.fc1(out)
+        out = self.gelu(out)
+        out = self.global_dropout(out)
+        out = self.fc2(out)
         return out
     
 # ------------------- 학습 함수 -------------------
-def train_model(df_train):
-    # df_train은 이미 engineer_features로 전처리된 상태
-    # 스케일러 학습: MinMaxScaler와 StandardScaler를 조건부로 적용
+def train_model(df_train, early_stopping_patience=3):
+    # --- 1. 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
+    split_idx = int(len(df_train) * 0.7)
+    df_train_feat = df_train.iloc[:split_idx]  # scaler 학습에 사용할 데이터
+
     scalers = {}
     if MINMAX_COLS:
-        scalers['minmax'] = MinMaxScaler().fit(df_train[MINMAX_COLS])
+        scalers['minmax'] = MinMaxScaler().fit(df_train_feat[MINMAX_COLS])
     if STANDARD_COLS:
-        scalers['standard'] = StandardScaler().fit(df_train[STANDARD_COLS])
+        scalers['standard'] = StandardScaler().fit(df_train_feat[STANDARD_COLS])
 
-    # 피처 스케일링 및 결합
+    # 전체 df_train에 스케일러 적용
     features = scale_features(df_train, scalers)
 
     # 시퀀스 및 레이블 생성
-    X_seq, y = prepare_sequences(features, df_train['Close'].values, FUTURE_N, TARGET_PERCENT)
+    X_seq, y = prepare_sequences(features, df_train['Close'].values, TARGET_PERCENT)
     if len(y) < 100:
         return None, scalers
 
-    # 전체 데이터를 학습에 사용
-    train_ds = TensorDataset(torch.tensor(X_seq, dtype=torch.float32), torch.tensor(y, dtype=torch.long))
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
-    
-    #  제거할 피처 이름 정의
-    bad_feature_names = []
+    # --- 2. train/val split (앞 70%: 학습, 뒤 30%: 검증) ---
+    split_idx = int(len(y) * 0.7)
+    X_train, X_val = X_seq[:split_idx], X_seq[split_idx:]
+    y_train, y_val = y[:split_idx], y[split_idx:]
 
-    # 이름 기반 인덱스 자동 변환 
-    # FEATURE_COLUMNS에서 해당 이름의 인덱스를 찾아 bad_feature_idxs 생성
+    train_ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
+    val_ds = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.long))
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+
+    bad_feature_names = []
     bad_feature_idxs = [FEATURE_COLUMNS.index(name) for name in bad_feature_names if name in FEATURE_COLUMNS]
 
-    # 모델 생성 
     model = StockModel(input_size=X_seq.shape[2], drop_features=bad_feature_idxs).to(device)
-    
-    # 옵티마이저, 가중치, 손실 함수 설정
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    weight_tensor = torch.tensor([1.0, 1.0]).to(device) 
+    weight_tensor = torch.tensor([1.0, 1.0]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
-    # 학습 루프
+    best_val_loss = float('inf')
+    best_state = None
+    epochs_no_improve = 0
+
     for epoch in range(EPOCHS):
-        # 학습 모드
+        # --- train ---
         model.train()
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
-            # 이전의 gradient 초기화
             optimizer.zero_grad()
-            # 손실 계산
             loss = criterion(model(xb), yb)
-            # 역전파 실행(gradient 계산)
             loss.backward()
-            # 파라미터 업데이트
             optimizer.step()
-            
-    # 학습된 model과, 피처 스케일링에 사용된 scalers를 반환
+
+        # --- validation ---
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                val_loss += criterion(logits, yb).item() * xb.size(0)
+        val_loss /= len(val_ds)
+
+        # scheduler step
+        scheduler.step(val_loss)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+        if epochs_no_improve >= early_stopping_patience:
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
     return model, scalers
 
 # ------------------- 학습, 예측, 평가, 매수 후보 -------------------
@@ -445,9 +454,9 @@ def process_code_for_date(args):
     df = data['df'] # 전처리된 주가 데이터
     
     # 1) 학습용 기간 설정
-    train_end = date - pd.Timedelta(days=1) # 예측 당일 전날까지만 학습에 사용
+    train_end = date  # 예측 당일 전날까지만 학습에 사용
     train_start = train_end - pd.DateOffset(years=TRAIN_YEARS) 
-    df_train = df[(df['Date']>=train_start) & (df['Date']<=train_end)]
+    df_train = df[(df['Date']>=train_start) & (df['Date'] < train_end)]
 
     # 2) 모델 학습
     model, scalers = train_model(df_train)
@@ -455,7 +464,7 @@ def process_code_for_date(args):
         return code, {}
 
     # 3) 최신 시퀀스로 예측
-    window = df[df['Date']<date].tail(SEQ_LEN) # 입력용 데이터 뽑기
+    window = df[df['Date'] < date].tail(SEQ_LEN) # 입력용 데이터 뽑기
     inp = scale_features(window, scalers) # 정규화 (SEQ_LEN, feature_dim)
     inp = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device) # PyTorch 텐서로 변환, 배치 차원 추가 (1, SEQ_LEN, feature_dim)
     # 예측 ([prob_up, prob_down])
@@ -470,8 +479,8 @@ def process_code_for_date(args):
 
     # 4) 정답 레이블 
     subset = df[df['Date'] < date]  # date 하루 전까지 데이터
-    if len(subset) >= 3:
-        base_price = subset.iloc[-2]['Close'] # 2일 전 종가 
+    if len(subset) >= 1:
+        base_price = subset.iloc[-1]['Close'] # 1일 전 종가 
         future_price = df.loc[df['Date'] == date, 'Close'].iloc[0] if date in df['Date'].values else None # 오늘 종가
         if future_price is not None:
             # 정답 라벨
@@ -491,8 +500,8 @@ def process_code_for_date(args):
                 else:
                     pred_class = None  # 확신 없는 예측은 무시
                 # 2일 전 → 1일 전 변화율, 3일 전 → 2일 전 변화율
-                prev1 = subset.iloc[-1]['Close']
-                prev2 = base_price
+                prev1 = base_price
+                prev2 = subset.iloc[-2]['Close']
                 prev3 = subset.iloc[-3]['Close'] 
                 
                 pct_change   = prev1 / prev2 - 1
@@ -507,7 +516,7 @@ def process_code_for_date(args):
                     
     # 매수 후보
     if result.get('last_pred_prob') is not None and result.get('pct_change') is not None:
-        if (result['last_pred_prob'][0] > BUY_PROB_THRESHOLD and result['pct_change'] < -0.02):
+        if (result['last_pred_prob'][0] >= BUY_PROB_THRESHOLD):
             result['buy_candidate'] = {'price': window['Close'].iloc[-1], 'pct_change': result['pct_change']}
 
     return code, result
@@ -626,8 +635,14 @@ def run_backtest(preproc_dfs, test_dates):
                                 break
         # 2) 매수 시뮬레이션
         if buy_candidates:
-            sorted_buy = sorted(buy_candidates.items(), key=lambda x: x[1]['pct_change'])
-            top_buy = dict(sorted_buy[:TOP_N_FOR_BUY]) # 매수할 종목들
+            # 코드 리스트를 확률 순으로 정렬 (높은 확률부터)
+            sorted_codes = sorted(
+                buy_candidates.keys(),
+                key=lambda c: stock_models[c]['last_pred_prob'][0],
+                reverse=True
+            )
+            # 상위 N개 종목만 뽑아서 dict 생성
+            top_buy = {code: buy_candidates[code] for code in sorted_codes[:TOP_N_FOR_BUY]}
         else:
             top_buy = {}
         for code, info in top_buy.items():
@@ -701,7 +716,7 @@ def run_backtest(preproc_dfs, test_dates):
 def plot_backtest_results(dates, values):
     plt.figure(figsize=(14,6))
     plt.plot(dates, values, label='총 자산')
-    plt.title('Walk-Forward 백테스트 총 자산')
+    plt.title('백테스트 기간의 총 자산')
     plt.xlabel('날짜')
     plt.ylabel('총 자산 (원)')
     formatter = ticker.FuncFormatter(lambda x, _: f"{int(x):,}")
@@ -731,7 +746,6 @@ def trade_log_csv(stock_models, filename="매매 로그.csv"):
         df = df.sort_values(by='buy_date')  # buy_date 기준으로 오름차순 정렬
     df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding='utf-8-sig')
     
-
 # 백테스트 기간 Confusion Matrix
 def plot_score(stock_models, filename="backtest_matrix.png"):
     all_true, all_pred = [], []
@@ -740,18 +754,55 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
         pred_list = data.get('pred', [])
         filtered = [(t, p) for t, p in zip(true_list, pred_list) if t is not None and p is not None]
         for t, p in filtered:
-            all_true.append(t) # 전체 종목의 정답 라벨 리스트
-            all_pred.append(p) # 전체 종목의 예측 라벨 리스트
+            all_true.append(t)
+            all_pred.append(p)
 
     if not all_true:
-        print("[SHAP] 유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
+        print("유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
         return
 
     cm = confusion_matrix(all_true, all_pred, labels=[0, 1])
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["상승(0)", "하락(1)"])
-    plt.figure(figsize=(6, 5))
-    disp.plot(cmap='Blues', values_format='d')
-    plt.title('백테스트 Confusion Matrix')
+    labels = ["상승(0)", "하락(1)"]
+    total = cm.sum()
+
+    # 확장된 행렬: 3x3 (예측 2 + 합계) x (실제 2 + 합계)
+    cm_extended = np.zeros((3, 3), dtype=int)
+    cm_extended[:2, :2] = cm
+    cm_extended[2, :2] = cm.sum(axis=0)         # 열 합계 (실제 기준)
+    cm_extended[:2, 2] = cm.sum(axis=1)         # 행 합계 (예측 기준)
+    cm_extended[2, 2] = total                   # 전체 합계
+
+    # 퍼센트 계산
+    cm_percent = cm_extended / total
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    cmap = plt.cm.Blues
+
+    for i in range(3):
+        for j in range(3):
+            value = cm_extended[i, j]
+            if i < 2 and j < 2:  # Confusion matrix 부분
+                percent = cm_percent[i, j] * 100
+                color = cmap(cm_percent[i, j])
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, color=color))
+                ax.text(j + 0.5, i + 0.5, f"{value} ({percent:.1f}%)", 
+                        va='center', ha='center', fontsize=11, color='black')
+            else:  # 합계 영역
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black'))
+                ax.text(j + 0.5, i + 0.5, f"{value}", 
+                        va='center', ha='center', fontsize=11, fontweight='bold')
+
+    # 축 설정
+    ax.set_xticks([0.5, 1.5, 2.5])
+    ax.set_yticks([0.5, 1.5, 2.5])
+    ax.set_xticklabels(labels + ['합계'], fontsize=11)
+    ax.set_yticklabels(labels + ['합계'], fontsize=11)
+    ax.set_xlim(0, 3)
+    ax.set_ylim(0, 3)
+    ax.invert_yaxis()
+    ax.set_title('백테스트 기간 Confusion Matrix', fontsize=14)
+    ax.set_xlabel('실제 라벨', fontsize=12)
+    ax.set_ylabel('예측 라벨', fontsize=12)
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
@@ -771,15 +822,15 @@ def main():
         df_full = df_stock.merge(market_idx_df, on='Date', how='left')
         preproc_dfs[code] = engineer_features(df_full)
     
-    # 5) 백테스트 날짜 구간 설정
+    # 4) 백테스트 날짜 구간 설정
     dates_df = pd.read_sql(f"SELECT Date FROM stock_data WHERE Code='{codes[0]}' ORDER BY Date", eng, parse_dates=['Date'])
     start_idx = dates_df[dates_df['Date'] >= BACKTEST_START_DATE].index[0]
     test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
 
-    # 6) 백테스트 실행
+    # 5) 백테스트 실행
     stock_models, portfolio_values = run_backtest(preproc_dfs, test_dates)
 
-    # 7) 결과 저장
+    # 6) 결과 저장
     plot_backtest_results(test_dates, portfolio_values)
     plot_score(stock_models)
     trade_log_csv(stock_models)
