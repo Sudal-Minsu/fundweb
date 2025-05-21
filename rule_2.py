@@ -807,7 +807,7 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
 
-# 오늘 매수후보 리스트 생성
+# 오늘 매수후보 리스트 
 def predict_today_candidates(engine=None):
     today_date = pd.Timestamp.today().normalize()
 
