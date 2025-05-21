@@ -18,7 +18,11 @@ trading_thread = None
 def ping():
     global trading_thread
     if trading_thread is None or not trading_thread.is_alive():
-        trading_thread = threading.Thread(target=auto_trading_loop("005930", interval_sec=60))
+        trading_thread = threading.Thread(
+            target=auto_trading_loop,
+            args=("005930",),
+            kwargs={"interval_sec": 60}
+        )
         trading_thread.daemon = True
         trading_thread.start()
 
@@ -27,6 +31,7 @@ def ping():
     trades = df.to_dict(orient='records')
 
     return render_template("ping.html", trades=trades)
+
 
 @app.route('/backtest')
 def backtest():
