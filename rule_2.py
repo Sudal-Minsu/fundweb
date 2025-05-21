@@ -807,6 +807,57 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
 
+# 오늘 매수후보 리스트 
+def predict_today_candidates(engine=None):
+    today_date = pd.Timestamp.today().normalize()
+
+    if engine is None:
+        engine = get_engine()
+    
+    limit = 200
+    codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {limit}", engine)['Code'].tolist()
+    market_idx_df = load_market_index(engine)
+
+    buy_candidates = []
+    for code in tqdm(codes, desc="실시간 매수 후보 예측"):
+        try:
+            df_stock = load_stock_data(code, engine)
+            df_full = df_stock.merge(market_idx_df, on='Date', how='left')
+            df = engineer_features(df_full)
+
+            train_end = today_date
+            train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
+            df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
+
+            model, scalers = train_model(df_train)
+            if model is None:
+                continue
+
+            window = df[df['Date'] < today_date].tail(SEQ_LEN)
+            if len(window) < SEQ_LEN:
+                continue
+
+            inp = scale_features(window, scalers)
+            inp_tensor = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device)
+
+            with torch.no_grad():
+                prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
+
+            if prob[0] >= BUY_PROB_THRESHOLD:
+                buy_candidates.append({
+                    'code': code,
+                    'prob_up': prob[0],
+                    'prob_down': prob[1],
+                    'price': window['Close'].iloc[-1]
+                })
+
+        except Exception as e:
+            print(f"[{code}] 예측 실패: {e}")
+            continue
+
+    top_candidates = sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
+    return top_candidates[:TOP_N_FOR_BUY]
+
 # ------------------- 메인 -------------------
 def main():
     # 1) db 연결
