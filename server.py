@@ -9,20 +9,30 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from rule_3 import auto_trading_loop
 import threading
 from functions import read_trades_mysql
+from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
 
+# DB 설정 (SQLite로 간단하게 시작)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///portfolio.db'
+db = SQLAlchemy(app)
+
+# DB 모델 정의
+class Portfolio(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ticker = db.Column(db.String(20))
+    weight = db.Column(db.Float)
+
+with app.app_context():
+    db.create_all()
+
 trading_thread = None
-
-
-def run_trading_loop():
-    auto_trading_loop("005930", interval_sec=60)
 
 @app.route('/ping')
 def ping():
     global trading_thread
     if trading_thread is None or not trading_thread.is_alive():
-        trading_thread = threading.Thread(target=run_trading_loop)
+        trading_thread = threading.Thread(target=auto_trading_loop("005930", interval_sec=60))
         trading_thread.daemon = True
         trading_thread.start()
 
