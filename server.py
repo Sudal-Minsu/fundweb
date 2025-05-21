@@ -1,128 +1,98 @@
-from flask import Flask, render_template, abort
+from flask import Flask, render_template, abort, jsonify, request, send_from_directory, redirect
 import os
 import pymysql
-import config
+from config import DB_CONFIG
+import pandas as pd
 from datetime import datetime
 from auto_pipeline import run_auto_pipeline
 from apscheduler.schedulers.background import BackgroundScheduler
+from rule_3 import auto_trading_loop
+import threading
+from functions import read_trades_mysql
 
 app = Flask(__name__)
 
-# 투자 규칙 데이터
-rules = [
-    {'id': 1, 'name': '랜덤자동매매', 'profit': 0, 'yield': 0},
-    {'id': 2, 'name': '규칙 2', 'profit': -150, 'yield': -4.2},
-    {'id': 3, 'name': '규칙 3', 'profit': 100, 'yield': 3.0}
-]
+trading_thread = None
 
-# 자동매매 집계 정보 조회
-def get_auto_trading_summary():
+
+def run_trading_loop():
+    auto_trading_loop("005930", interval_sec=60)
+
+@app.route('/ping')
+def ping():
+    global trading_thread
+    if trading_thread is None or not trading_thread.is_alive():
+        trading_thread = threading.Thread(target=run_trading_loop)
+        trading_thread.daemon = True
+        trading_thread.start()
+
+    # ✅ 거래 로그 읽어오기
+    df = read_trades_mysql("trade_history")
+    trades = df.to_dict(orient='records')
+
+    return render_template("ping.html", trades=trades)
+
+@app.route('/backtest')
+def backtest():
+    timestamp = int(datetime.now().timestamp())
+
+    # 경로 기준을 fundweb 상위 디렉토리의 rule_2_결과로 설정
+    base_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
+
+    # 성능 지표
+    score_table = None
+    score_path = os.path.join(base_dir, "성능 지표.csv")
+    if os.path.exists(score_path):
+        df_score = pd.read_csv(score_path)
+        df_score = df_score.sort_values(by="f1_score", ascending=False).head(10)
+        score_table = df_score.to_dict(orient="records")
+
+    # 매매 로그
+    trade_log_table = None
+    trade_log_path = os.path.join(base_dir, "매매 로그.csv")
+    if os.path.exists(trade_log_path):
+        df_log = pd.read_csv(trade_log_path)
+        df_log = df_log.sort_values("buy_date", ascending=False).head(10)
+        trade_log_table = df_log.to_dict(orient="records")
+
+    # 거래 성공률
+    success_rate_table = None
+    success_rate_path = os.path.join(base_dir, "거래 성공률.csv")
+    if os.path.exists(success_rate_path):
+        df_success = pd.read_csv(success_rate_path)
+        df_success = df_success.sort_values(by="success_rate", ascending=False).head(10)
+        success_rate_table = df_success.to_dict(orient="records")
+
+    return render_template(
+        'backtest.html',
+        timestamp=timestamp,
+        score_table=score_table,
+        trade_log_table=trade_log_table,
+        success_rate_table=success_rate_table
+    )
+
+@app.route("/home")
+def home():
+    return render_template("home.html")
+
+@app.route('/run-backtest', methods=['POST'])
+def run_backtest():
     try:
-        conn = pymysql.connect(**config.DB_CONFIG)
-        cursor = conn.cursor()
-        query = """
-            SELECT SUM(profit) AS total_profit,
-                   AVG(profit_rate) AS average_yield
-            FROM trade_history
-            WHERE profit IS NOT NULL
-        """
-        cursor.execute(query)
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return result[0] or 0, result[1] or 0
+        run_auto_pipeline()
+        return jsonify({"status": "ok"})
     except Exception as e:
-        print("MySQL 조회 오류:", e)
-        return 0, 0
+        return jsonify({"status": "error", "message": str(e)})
 
-# APScheduler를 사용한 백그라운드 작업 스케줄링
-scheduler = BackgroundScheduler()
-scheduler.add_job(run_auto_pipeline, 'interval', minutes=5)
-scheduler.start()
+@app.route('/external/<path:filename>')
+def external_static(filename):
+    external_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
+    return send_from_directory(external_dir, filename)
 
-# 서버 실행 시 1회 실행
-run_auto_pipeline()
-
-@app.route('/')
-def index():
-    total_profit, average_yield = get_auto_trading_summary()
-    rules[0]['profit'] = total_profit
-    rules[0]['yield'] = average_yield
-    return render_template('index.html', rules=rules)
-
-@app.route('/rule/<int:rule_id>')
-def rule_detail(rule_id):
-    rule = next((r for r in rules if r['id'] == rule_id), None)
-    if rule is None:
-        return abort(404)
-
-
-    labels, scores, titles = [], [], []
-    
-    if rule_id == 2:
-        try:
-            conn = pymysql.connect(**config.DB_CONFIG)
-            cursor = conn.cursor()
-            today = datetime.now().strftime('%Y-%m-%d')
-            cursor.execute("""
-                SELECT title, published_date, sentiment_score
-                FROM news
-                WHERE DATE(published_date) = %s
-                ORDER BY published_date DESC
-            """, (today,))
-            data = cursor.fetchall()
-            cursor.close()
-            conn.close()
-
-            labels = [row[1].strftime('%H:%M') for row in data]
-            scores = [row[2] for row in data]
-            titles = [row[0] for row in data]
-            update_time = datetime.now()
-        except Exception as e:
-            print("뉴스 데이터 조회 오류:", e)
-
-        zipped_data = zip(labels, titles, scores)
-        
-        return render_template(
-            'rule_detail.html',
-            rule=rule,
-            rule_id=rule_id,
-            labels=labels,
-            scores=scores,
-            titles=titles,
-            zipped_data=zipped_data,
-            update_time=update_time
-          )
-
-@app.route('/api/news')
-def api_news():
-    try:
-        conn = pymysql.connect(**config.DB_CONFIG)
-        cursor = conn.cursor()
-        today = datetime.now().strftime('%Y-%m-%d')
-        cursor.execute("""
-            SELECT title, published_date, sentiment_score
-            FROM news
-            WHERE DATE(published_date) = %s
-            ORDER BY published_date DESC
-        """, (today,))
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        labels = [row[1].strftime('%H:%M') for row in data]
-        scores = [row[2] for row in data]
-        titles = [row[0] for row in data]
-
-        return {
-            "labels": labels,
-            "scores": scores,
-            "titles": titles
-        }
-    except Exception as e:
-        return {"error": str(e)}, 500
+@app.route("/")
+def root():
+    return redirect("/home")
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)

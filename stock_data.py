@@ -14,7 +14,7 @@ import pandas_datareader.data as web
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
-start_date = today - datetime.timedelta(days=365 * 5)  
+start_date = today - datetime.timedelta(days=365 * 12)  
 
 
 """ MySQL DB 연결 함수 """
@@ -22,7 +22,7 @@ def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
 
 
-""" 최대 250개 뽑은 다음 그 중에서 200개 추출 """
+""" 최대 300개 뽑은 다음 그 중에서 200개 추출 """
 def get_top_200_codes():
     
     """ 종목들의 투자지표(ROE, PER, 시가총액)를 크롤링해서 dataframe으로 정리 """
@@ -89,31 +89,43 @@ def get_top_200_codes():
     df['weighted_score'] = 0.3 * df['ROE_rank'] + 0.3 * df['invPER_rank'] + 0.4 * df['시총_rank']
 
     # weighted_score 기준 오름차순 정렬 후, 중복 종목코드를 제거하고 상위 250개 종목 추출
-    top_pool = df.sort_values('weighted_score').drop_duplicates(subset='종목코드').head(250)
+    top_pool = df.sort_values('weighted_score').drop_duplicates(subset='종목코드').head(300)
     top_codes_pool = top_pool['종목코드'].tolist()
 
-    # 최종적으로 조건에 통과한 종목 코드들만 담는 리스트
-    valid_codes = []
     print("\n[FDR 데이터 확인 중: 거래량 0 없는 종목 선별]")
+    valid_codes_with_start = []  # (code, start_date) 저장
     for code in tqdm(top_codes_pool, desc="조건 필터링 중"):
         try:
             df_stock = fdr.DataReader(code, start_date, today)
-            # 데이터가 200일 이상 있어야 함 (3년치면 보통 750일 이상)
-            if len(df_stock) >= 200:
+            # 상장일이 start_date 이후면 제외
+            # 실제 상장일 = 데이터 시작일
+            first_date = df_stock.index.min().date()
+            # 데이터가 2800일 이상 있어야 함 (10년치면 보통 2400일 이상)
+            if len(df_stock) >= 2800:
                 # 최근 100일 데이터 추출
                 recent_100 = df_stock.tail(100)
                 # 최근 100일 중 거래량 결측 또는 1 이하인 날이 50일 초과면 제외
                 low_volume_days = recent_100['Volume'].isna().sum() + (recent_100['Volume'] <= 1).sum()
                 if low_volume_days <= 50:
-                    valid_codes.append(code)
-            # 최종 200개 확보 시 중단
-            if len(valid_codes) >= 200:
-                break  
-        except Exception as e:
+                    valid_codes_with_start.append((code, first_date))
+
+        except Exception:
             continue
 
-    print(f"\n최종 조건 만족 종목 수: {len(valid_codes)}개")
-    return valid_codes
+    # 가장 오래된 종목의 상장일 기준 잡기
+    if not valid_codes_with_start:
+        print("\n[경고] 조건을 만족하는 종목이 없습니다.")
+        return []
+
+    # 기준일 설정 (가장 오래된 종목의 시작일)
+    oldest_start_date = min(date for _, date in valid_codes_with_start)
+    print(f"\n기준일: {oldest_start_date}")
+
+    # 이 날짜보다 늦게 상장한 종목은 제외
+    final_valid_codes = [code for code, date in valid_codes_with_start if date <= oldest_start_date]
+
+    print(f"최종 조건 만족 종목 수: {len(final_valid_codes)}개")
+    return final_valid_codes[:200]
 
 
 """ 종목의 데이터 저장 """
@@ -121,7 +133,7 @@ def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
         df.reset_index(inplace=True)
-        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']]  
+        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']] 
         df['Code'] = code
 
         conn = get_connection()
@@ -241,8 +253,8 @@ def run_stock_data():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 3년 이전 데이터 삭제
-    cutoff_date = today - datetime.timedelta(days=365 * 5)
+    # 이전 데이터 삭제
+    cutoff_date = today - datetime.timedelta(days=365 * 12)
     cursor.execute("DELETE FROM stock_data WHERE Date < %s", (cutoff_date,))
     conn.commit()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")

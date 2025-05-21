@@ -9,8 +9,12 @@ import pymysql
 import sys
 from datetime import datetime, timedelta
 from sklearn.linear_model import LinearRegression
+<<<<<<< HEAD
 from config import get_api_keys, ACCOUNT_INFO, DB_CONFIG
 import traceback
+=======
+from config import ACCOUNT_INFO, DB_CONFIG
+>>>>>>> fe7303e3c8aeb8b5a065400749fda801371ac62d
 
 app_key = keyring.get_password('mock_app_key', '진상원')
 app_secret = keyring.get_password('mock_app_secret', '진상원')

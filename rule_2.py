@@ -1,891 +1,841 @@
-# 데이터 관련 설정
-SEQ_LEN = 20             # 입력 시퀀스 길이 (일 단위)
-TRAIN_YEARS = 3          # 학습에 사용할 데이터 기간 (년 단위)
-TEST_PERIOD_DAYS = 60    # 백테스트 기간 (일 단위)
-RSI_n = 5                # RSI 계산에 사용할 기간 (n일)
-STOCK_NUMBER = 100        # 종목 수 (최대 200개)
-
-# 백테스트 시작 날짜 (사용자가 원하는 날짜로 수정 가능)
-import pandas as pd
-BACKTEST_START_DATE = pd.to_datetime("2024-09-05")          
-
-# 예측 파라미터 (n과 a)
-FUTURE_N = 2             # 몇 일 뒤의 종가를 기준으로 할지 (n일 뒤)
-TARGET_PERCENT = 0.02    # 종가 변화 기준 
-
-# 모델 학습 관련
-LEARNING_RATE = 0.001    # 학습률
-EPOCHS = 200             # 학습 반복 횟수
-BATCH_SIZE = 32          # 배치 사이즈     
-
-# 전역 feature 설정: 연속형과 이진 시그널 분리 
-CONTINUOUS_COLS = [
-    #'avg_sentiment',
-    #'Close_shifted',
-    #'LogVolume',
-    #'TradingValue',
-    #'Volatility_5',
-    'Momentum_2',
-    'Price_vs_MA20',
-    #'RSI_n',
-    #'MACD_Histogram',
-    #'KOSPI',
-    #'KOSDAQ', 
-    #'USD_KRW',
-    #'US_RATE'
-]
-
-BINARY_COLS = [
-    #'RSI_oversold', 
-    #'RSI_overbought',
-    #'MACD_cross_up',
-    #'MACD_cross_down',
-    #'ShortTerm_Drop',
-    #'Volume_jump',
-    #'Volatility_spike',
-    'RSI_normal_zone',
-    #'MACD_bullish_cross',
-    #'Price_near_low_20d',
-    #'MA20_above_MA60',
-]
-FEATURE_COLUMNS = CONTINUOUS_COLS + BINARY_COLS
-
-# 백테스트 전략 관련
-INITIAL_CAPITAL = 100_000_000     # 초기 자본 (1억 원)
-     
-# 매매 조건 (예측 확률 기준)
-BUY_PROB_THRESHOLD = 0.55          # 매수 신호 확률 기준 (상승 예측: class 0)
-SELL_PROB_THRESHOLD = 0.55         # 매도 신호 확률 기준 (하락 예측: class 1)
-
-# 매매 지표
-RSI_b = 2  # RSI 계산에 사용할 기간 
-              
-# 순위 기반 전략 관련 
-TOP_N_FOR_BUY = 10                # 매수 후보 종목 수 (상위 n위 안에 있는 종목)
-BOTTOM_N_FOR_SELL_RANK = 190      # 매도 후보 종목 수 (상위 n위 밖에 있는 종목)
-
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = "2"
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import tensorflow as tf
-from sklearn.preprocessing import MinMaxScaler
+import matplotlib.ticker as ticker
+import matplotlib.font_manager as fm
 from tqdm import tqdm
 from sqlalchemy import create_engine
-import matplotlib.font_manager as fm
-import matplotlib.ticker as ticker
-from sklearn.metrics import precision_score, recall_score, f1_score
-from sklearn.model_selection import TimeSeriesSplit  
-from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
-import logging
-tf.get_logger().setLevel(logging.ERROR)
-import shap
-import seaborn as sns
-import warnings
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.metrics import confusion_matrix
+from joblib import Parallel, delayed
+import multiprocessing as mp
+from config import DB_CONFIG
 
-# 결과 저장 디렉토리 설정 
-OUTPUT_DIR = "rule_2_결과"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# ------------------- 설정 -------------------
+SEQ_LEN = 5
+TRAIN_YEARS = 12
+TEST_PERIOD_DAYS = 60
+TARGET_PERCENT = 0.01
+LEARNING_RATE = 0.001
+EPOCHS = 20
+BATCH_SIZE = 32
+INITIAL_CAPITAL = 100_000_000
+BUY_PROB_THRESHOLD = 0.7
+SELL_PROB_THRESHOLD = 0.7
+TOP_N_FOR_BUY = 3
+BOTTOM_N_FOR_SELL_RANK = 190
+FEE_RATE = 0.000140527
+TAX_RATE = 0.0015
+BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
+STOCK_NUMBER = 200
 
-# 백테스트 기간 (TEST_PERIOD_DAYS 일)
-global_test_dates = pd.date_range(start=BACKTEST_START_DATE, periods=TEST_PERIOD_DAYS, freq='B')
-TEST_END_DATE = global_test_dates[-1]
+# 병렬 설정
+N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
+CHUNK = 20  # 워커당 묶을 종목 수
 
-# 폰트 설정 (Windows의 말굽체 사용 예시)
+# 폰트 설정
 font_path = "C:/Windows/Fonts/malgun.ttf"
 font_name = fm.FontProperties(fname=font_path).get_name()
 plt.rcParams['font.family'] = font_name
 plt.rcParams['axes.unicode_minus'] = False
 
+# 출력 폴더 설정
+OUTPUT_DIR = "rule_2_결과"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-""" DB 연결 엔진 생성 """
+# 고정 시드 설정
+np.random.seed(42)
+
+# 장치 설정
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
+# ------------------- 피처 정의 -------------------
+STANDARD_COLS = [
+    # 수익률
+    'Close_RET', 
+    # 모멘텀
+    'Momentum_5',
+    'Momentum_10',
+    'Momentum_20', 
+    # 이동평균 대비
+    'Price_vs_MA20', 
+    # Disparity
+    'Disparity_5',
+    'Disparity_5_Slope',
+    'Disparity_10',
+    'Disparity_20', 
+    # MA 기울기 & 갭
+    'MA_5_slope',
+    'MA_20_slope',
+    'MA_20_slope_norm',
+    'MA5_MA20_gap',
+    'MA5_vs_MA20_Gap',
+    'MA_std_5_10_20', 
+    # 변동성
+    'Volatility_5',
+    'Volatility_ratio_5_20', 
+    # MACD
+    'MACD_Histogram',
+    'MACD_Histogram_Slope', 
+    # RSI
+    'RSI_Slope', 
+    # 거시 지표 변화량
+    'USD_KRW_RET',
+    'USD_KRW_Momentum',
+    'USD_KRW_DEVIATION',
+    'KOSPI_RET',
+    'KOSPI_VOLATILITY',
+    'KOSDAQ_RET',
+    'KOSDAQ_VOLATILITY',
+    # 시가/고저 활용
+    'Intraday_Range',
+    # 최근 고점/저점 대비
+    'Price_vs_high_20d',
+    'Price_vs_low_20d',
+    # 시장 간 스프레드
+    'KOSPI_vs_KOSDAQ', 
+]
+
+MINMAX_COLS = [
+    # 레벨 값
+    'Close',
+    'LogVolume',
+    'TradingValue',
+    'TradingValue_Ratio', 
+    # 수준 지표
+    'RSI_n',
+    'KOSPI',
+    'KOSDAQ',
+    'USD_KRW',
+    'USD_KRW_MA_5', 
+    # 밴드/확률형 지표 (0~1 or 0~100)
+    'BB_PCT',
+    'Stoch_K',
+    'Stoch_D', 
+    # 종가의 고저 내 상대 위치 (0~1)
+    'Close_to_High',
+]
+
+BINARY_COLS = [
+    # RSI 상태
+    'RSI_oversold',
+    'RSI_overbought',
+    'RSI_normal_zone', 
+    # 단기 급락, 거래량 급증, 변동성 스파이크
+    'ShortTerm_Drop',
+    'Volume_jump',
+    'Volatility_spike',
+    # 저가권 근접
+    'Price_near_low_20d', 
+    # MA 돌파
+    'Breaks_MA_20',
+    'Breaks_MA_5',
+    'MA20_above_MA60',
+    'Strong_Trend', 
+    # 환율↓+MACD↑, 거래량+MACD 콤보, 복합 매수 시그널
+    'USD_down_MACD_up',
+    'MACD_cross_up',
+    'MACD_cross_down',
+    'MACD_bullish_cross',
+    'Volume_MACD_Combo',
+    'Composite_Bullish_Signal', 
+    # 갭업/갭다운
+    'Gap_Up',
+    'Gap_Down',
+    # 캔들 패턴
+    'Bullish_Candle',
+    'Bearish_Candle',
+    # 추가 MACD, 반등 감지
+    'MACD_histogram_above_zero', 
+    'Rebound_from_low', 
+]
+CONTINUOUS_COLS = STANDARD_COLS + MINMAX_COLS 
+FEATURE_COLUMNS = CONTINUOUS_COLS + BINARY_COLS
+
+# ------------------- 스케일링 -------------------
+def scale_features(df, scalers): 
+    if df.empty:
+        raise ValueError("[scale_features] 입력 데이터프레임이 비어 있습니다.")
+    parts = []
+    if 'minmax' in scalers:
+        parts.append(scalers['minmax'].transform(df[MINMAX_COLS]))
+    if 'standard' in scalers:
+        parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
+    if BINARY_COLS:
+        parts.append(df[BINARY_COLS].values)
+    return np.concatenate(parts, axis=1)
+
+# ------------------- DB & 데이터 로딩 -------------------
 def get_engine():
-    from config import DB_CONFIG
     return create_engine(
         f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
     )
 
-
-""" stock_data 테이블 가져오기 """
 def load_stock_data(code, engine):
-    query = f"SELECT Date, Open, High, Low, Close, Volume FROM stock_data WHERE Code = '{code}' ORDER BY Date"
-    df = pd.read_sql(query, engine, parse_dates=['Date'])
+    q = f"SELECT Date, Open, High, Low, Close, Volume FROM stock_data WHERE Code='{code}' ORDER BY Date"
+    df = pd.read_sql(q, engine, parse_dates=['Date'])
     df['Code'] = code
     return df
 
-
-""" market_index 테이블 가져오기 """
 def load_market_index(engine):
-    query = "SELECT Date, IndexType, Close FROM market_index"
-    df_market = pd.read_sql(query, engine, parse_dates=['Date'])
-    df_market_pivot = df_market.pivot(index='Date', columns='IndexType', values='Close').reset_index()
-    return df_market_pivot
+    q = "SELECT Date, IndexType, Close FROM market_index"
+    df = pd.read_sql(q, engine, parse_dates=['Date'])
+    return df.pivot(index='Date', columns='IndexType', values='Close').reset_index()
 
-
-""" avg_sentiment 테이블 가져오기 """
-def load_sentiment_data(engine):
-    query = "SELECT date AS Date, avg_sentiment FROM avg_sentiment"
-    return pd.read_sql(query, engine, parse_dates=['Date'])
-
-
-""" stock_data 테이블에서 필요한 수의 종목 코드 가져오기 """
-def get_distinct_codes(engine, limit=200):
-    query = f"SELECT DISTINCT Code FROM stock_data ORDER BY Code LIMIT {limit}"
-    df = pd.read_sql(query, engine)
-    return df['Code'].tolist()
-
-
-""" RSI 계산 함수 """
-def compute_rsi(series: pd.Series, period) -> pd.Series:
+# ------------------- 지표 계산 -------------------
+def compute_rsi(series, period):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
     rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(0)
+    return (100 - 100/(1+rs)).fillna(0)
 
+# ------------------- 전처리 공통 -------------------
+def engineer_features(df):
+    # --- 기본 정리 ---
+    df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
+    df['LogVolume'] = np.log1p(df['Volume'])
+    df['TradingValue'] = df['Close'] * df['Volume']
+    df['Close'] = df['Close']
+    df['Close_RET'] = df['Close'].pct_change().fillna(0)
 
-""" 시퀀스 생성 함수 """
-def prepare_sequences(features_2d, close_prices, future_n, target_percent):
+    # --- 거시 경제 변수 전처리 ---
+    df[['KOSPI','KOSDAQ','USD_KRW','US_RATE']] = df[['KOSPI','KOSDAQ','USD_KRW','US_RATE']].ffill().fillna(0)
+    df['USD_KRW_RET'] = df['USD_KRW'].pct_change().fillna(0)
+    df['USD_KRW_MA_5'] = df['USD_KRW'].rolling(5).mean().fillna(0)
+    df['USD_KRW_DEVIATION'] = (df['USD_KRW'] - df['USD_KRW_MA_5']) / df['USD_KRW_MA_5']
+    df['USD_KRW_Momentum'] = df['USD_KRW'].pct_change(3).fillna(0)
+    df['KOSPI_RET'] = df['KOSPI'].pct_change().fillna(0)
+    df['KOSDAQ_RET'] = df['KOSDAQ'].pct_change().fillna(0)
+    df['KOSPI_VOLATILITY'] = df['KOSPI'].rolling(5).std().fillna(0)
+    df['KOSDAQ_VOLATILITY'] = df['KOSDAQ'].rolling(5).std().fillna(0)
+    df['KOSPI_vs_KOSDAQ'] = df['KOSPI_RET'] - df['KOSDAQ_RET']
+
+    # --- 거래량 기반 ---
+    df['TradingValue_Ratio'] = df['TradingValue'] / df['TradingValue'].rolling(5).mean()
+    df['Volume_jump'] = (df['Volume'] > df['Volume'].rolling(20).mean() * 1.5).astype(int)
+
+    # --- 모멘텀 ---
+    df['Momentum_5'] = df['Close'] / df['Close'].shift(5) - 1
+    df['Momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
+    df['Momentum_20'] = df['Close'] / df['Close'].shift(20) - 1
+
+    # --- 단기 낙폭 및 저가 근접 ---
+    df['ShortTerm_Drop'] = (df['Close'].pct_change(1) < -0.02).astype(int)
+    df['Price_near_low_20d'] = (df['Close'] < df['Close'].rolling(20).min() * 1.05).astype(int)
+    df['Price_vs_high_20d'] = df['Close'] / df['Close'].rolling(20).max() - 1
+    df['Price_vs_low_20d'] = df['Close'] / df['Close'].rolling(20).min() - 1
+
+    # --- 변동성 ---
+    df['Volatility_5'] = df['Close'].rolling(5).std().fillna(0)
+    df['Volatility_spike'] = (df['Volatility_5'] > df['Volatility_5'].rolling(30).mean()).astype(int)
+    df['Volatility_ratio_5_20'] = df['Volatility_5'] / df['Close'].rolling(20).std()
+
+    # --- 이동 평균 / 추세 ---
+    df['MA_20'] = df['Close'].rolling(20).mean()
+    df['MA_60'] = df['Close'].rolling(60).mean()
+    df['Price_vs_MA20'] = df['Close'] / df['MA_20'] - 1
+    df['Disparity_5'] = df['Close'] / df['Close'].rolling(5).mean() - 1
+    df['Disparity_10'] = df['Close'] / df['Close'].rolling(10).mean() - 1
+    df['Disparity_20'] = df['Close'] / df['Close'].rolling(20).mean() - 1
+    df['Disparity_5_Slope'] = df['Disparity_5'].diff().fillna(0)
+    df['MA_20_slope'] = df['MA_20'].diff().fillna(0)
+    df['MA_5_slope'] = df['Close'].rolling(5).mean().diff().fillna(0)
+    df['MA_20_slope_norm'] = df['MA_20_slope'] / df['MA_20'].shift(1)
+    df['MA5_MA20_gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
+    df['MA_std_5_10_20'] = df['Close'].rolling(5).mean().rolling(5).std().fillna(0)
+    df['Breaks_MA_20'] = (df['Close'] > df['MA_20']).astype(int)
+    df['Breaks_MA_5'] = (df['Close'] > df['Close'].rolling(5).mean()).astype(int)
+    df['MA20_above_MA60'] = (df['MA_20'] > df['MA_60']).astype(int)
+    df['Strong_Trend'] = ((df['MA_5_slope'] > 0) & (df['MA20_above_MA60'] == 1)).astype(int)
+    df['MA5_vs_MA20_Gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
+
+    # --- RSI ---
+    df['RSI_n'] = compute_rsi(df['Close'], 2)
+    df['RSI_Slope'] = df['RSI_n'].diff().fillna(0)
+    df['RSI_normal_zone'] = ((df['RSI_n'] >= 30) & (df['RSI_n'] <= 70)).astype(int)
+    df['RSI_oversold'] = (df['RSI_n'] < 30).astype(int)
+    df['RSI_overbought'] = (df['RSI_n'] > 70).astype(int)
+
+    # --- MACD ---
+    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD_Line'] = df['EMA12'] - df['EMA26']
+    df['Signal_Line'] = df['MACD_Line'].ewm(span=9, adjust=False).mean()
+    df['MACD_Histogram'] = df['MACD_Line'] - df['Signal_Line']
+    df['MACD_Histogram_Slope'] = df['MACD_Histogram'].diff().fillna(0)
+    df['MACD_cross_up'] = ((df['MACD_Histogram'].shift(1) < 0) & (df['MACD_Histogram'] > 0)).astype(int)
+    df['MACD_cross_down'] = ((df['MACD_Histogram'].shift(1) > 0) & (df['MACD_Histogram'] < 0)).astype(int)
+    df['MACD_bullish_cross'] = ((df['MACD_Line'].shift(1) < df['Signal_Line'].shift(1)) & (df['MACD_Line'] > df['Signal_Line'])).astype(int)
+    df['MACD_histogram_above_zero'] = (df['MACD_Histogram'] > 0).astype(int)
+
+    # --- 복합 시그널 ---
+    df['USD_down_MACD_up'] = ((df['USD_KRW_DEVIATION'] < -0.002) & (df['MACD_cross_up'] == 1)).astype(int)
+    df['Volume_MACD_Combo'] = ((df['Volume_jump'] == 1) & (df['MACD_bullish_cross'] == 1)).astype(int)
+    df['Composite_Bullish_Signal'] = (
+        df[['USD_down_MACD_up', 'Strong_Trend', 'Volume_MACD_Combo']].sum(axis=1) >= 2
+    ).astype(int)
+
+    # --- Bollinger Bands ---
+    df['BB_MID'] = df['Close'].rolling(20).mean()
+    df['BB_STD'] = df['Close'].rolling(20).std()
+    df['BB_UPPER'] = df['BB_MID'] + 2 * df['BB_STD']
+    df['BB_LOWER'] = df['BB_MID'] - 2 * df['BB_STD']
+    df['BB_PCT'] = (df['Close'] - df['BB_LOWER']) / (df['BB_UPPER'] - df['BB_LOWER'] + 1e-5)
+
+    # --- Stochastic Oscillator ---
+    low_min = df['Low'].rolling(window=14).min()
+    high_max = df['High'].rolling(window=14).max()
+    df['Stoch_K'] = 100 * (df['Close'] - low_min) / (high_max - low_min + 1e-5)
+    df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
+
+    # --- 시가/고저 기반 피처 ---
+    df['Gap_Up'] = ((df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) > 0.02).astype(int)
+    df['Gap_Down'] = ((df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) < -0.02).astype(int)
+    df['Close_to_High'] = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + 1e-5)
+    df['Intraday_Range'] = (df['High'] - df['Low']) / df['Open']
+    df['Bullish_Candle'] = ((df['Close'] > df['Open']) & (df['Close_to_High'] > 0.7)).astype(int)
+    df['Bearish_Candle'] = ((df['Close'] < df['Open']) & (df['Close_to_High'] < 0.3)).astype(int)
+
+    # --- 반등 시나리오 ---
+    df['Rebound_from_low'] = ((df['Price_near_low_20d'] == 1) & (df['Close_RET'] > 0)).astype(int)
+    
+    # 결측값 제거
+    df.dropna(subset=FEATURE_COLUMNS, inplace=True)
+    # 날짜 기준으로 오름차순 정렬
+    df.sort_values('Date', inplace=True)
+    return df
+
+# ------------------- 시퀀스 생성 함수 -------------------
+def prepare_sequences(features, close_prices, target_percent):
     sequences, targets = [], []
-    for i in range(0, len(features_2d) - SEQ_LEN - future_n + 1):
-        window = features_2d[i : i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 2] 
-        future_price = close_prices[i + SEQ_LEN - 1 + future_n]
-        if future_price > base_price * (1 + target_percent):
-            movement = [1, 0]  # 상승 → 매수 (class 0)
-        elif future_price < base_price * (1 - target_percent):
-            movement = [0, 1]  # 하락 → 매도 (class 1)
+    max_i = len(features) - SEQ_LEN 
+    for i in range(max_i):
+        window = features[i: i + SEQ_LEN]
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
+        future_price = close_prices[i + SEQ_LEN] # 오늘
+        if future_price >= base_price * (1 + target_percent):
+            label = 0  # 상승
+        elif future_price <= base_price * (1 - target_percent):
+            label = 1  # 하락
         else:
             continue
         sequences.append(window)
-        targets.append(movement)
-    sequences = np.array(sequences)
-    targets = np.array(targets)
-    return sequences, targets
+        targets.append(label)
+    return np.array(sequences), np.array(targets)
 
+# ------------------- 모델 정의 -------------------
+class StockModel(nn.Module):
+    def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None, mask_scale=0.3):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.seq_len = SEQ_LEN
 
-""" 데이터 전처리, 모델 생성 및 학습 """
-def prepare_stock_models(engine, top_codes):
-    stock_models = {}
-    loss_dict = {}
-    for code in top_codes:
-        df_stock = load_stock_data(code, engine)
-        df_sentiment = load_sentiment_data(engine)
-        df_stock = df_stock.merge(df_sentiment, on='Date', how='left')
-        df_market = load_market_index(engine)
-        df_stock = df_stock.merge(df_market, on='Date', how='left')
-        
-        # 감성 관련
-        df_stock['avg_sentiment'] = df_stock['avg_sentiment'].fillna(0)
-        df_stock['Sentiment_spike_up'] = (df_stock['avg_sentiment'].diff(1) > 0.05).astype(int)
-        
-        # 주가 관련
-        df_stock['Open'] = df_stock['Open'].astype(float)
-        df_stock['High'] = df_stock['High'].astype(float)
-        df_stock['Low'] = df_stock['Low'].astype(float)
-        df_stock['Close'] = df_stock['Close'].astype(float)
-        df_stock['Close_shifted'] = df_stock['Close'].astype(float)
-        
-        # 거래량 관련
-        df_stock['Volume'] = pd.to_numeric(df_stock['Volume'], errors='coerce').fillna(0)
-        df_stock['LogVolume'] = np.log1p(df_stock['Volume'])
-        df_stock['TradingValue'] = df_stock['Close'] * df_stock['Volume']
-        df_stock['Volatility_5'] = df_stock['Close'].rolling(5).std()
-        df_stock['Volatility_spike'] = (df_stock['Volatility_5'] > df_stock['Volatility_5'].rolling(30).mean()).astype(int)
-        df_stock['Volume_jump'] = (df_stock['Volume'] > df_stock['Volume'].rolling(20).mean() * 1.5).astype(int)
-        
-        # 종가 관련
-        df_stock['Momentum_2'] = df_stock['Close'] / df_stock['Close'].shift(2) - 1
-        df_stock['ShortTerm_Drop'] = (df_stock['Close'].pct_change(1) < -0.02).astype(int)
-        df_stock['Price_near_low_20d'] = (df_stock['Close'] < df_stock['Close'].rolling(20).min() * 1.05).astype(int)
-        
-        # 이동평균선 관련
-        df_stock['MA_20'] = df_stock['Close'].rolling(20).mean()
-        df_stock['MA_60'] = df_stock['Close'].rolling(60).mean()
-        df_stock['Price_vs_MA20'] = df_stock['Close'] / df_stock['MA_20'] - 1
-        df_stock['MA20_above_MA60'] = (df_stock['MA_20'] > df_stock['MA_60']).astype(int)
-        
-        # RSI 관련
-        df_stock['RSI_n'] = compute_rsi(df_stock['Close'], period=RSI_n)
-        df_stock['RSI_b'] = compute_rsi(df_stock['Close'], period=RSI_b)
-        df_stock['RSI_normal_zone'] = ((df_stock['RSI_n'] >= 30) & (df_stock['RSI_n'] <= 70)).astype(int)
-        df_stock['RSI_oversold'] = (df_stock['RSI_n'] < 30).astype(int)
-        df_stock['RSI_overbought'] = (df_stock['RSI_n'] > 70).astype(int)
-        
-        # MACD 관련
-        df_stock['EMA12'] = df_stock['Close'].ewm(span=12, adjust=False).mean()
-        df_stock['EMA26'] = df_stock['Close'].ewm(span=26, adjust=False).mean()
-        df_stock['MACD_Line'] = df_stock['EMA12'] - df_stock['EMA26']
-        df_stock['Signal_Line'] = df_stock['MACD_Line'].ewm(span=9, adjust=False).mean()
-        df_stock['MACD_Histogram'] = df_stock['MACD_Line'] - df_stock['Signal_Line']
-        df_stock['MACD_cross_up'] = ((df_stock['MACD_Histogram'].shift(1) < 0) & (df_stock['MACD_Histogram'] > 0)).astype(int)
-        df_stock['MACD_cross_down'] = ((df_stock['MACD_Histogram'].shift(1) > 0) & (df_stock['MACD_Histogram'] < 0)).astype(int)
-        df_stock['MACD_bullish_cross'] = ((df_stock['MACD_Line'].shift(1) < df_stock['Signal_Line'].shift(1)) & (df_stock['MACD_Line'] > df_stock['Signal_Line'])).astype(int)
-        
-        # market_index 병합 
-        df_stock[['KOSPI', 'KOSDAQ', 'USD_KRW', 'US_RATE']] = df_stock[['KOSPI', 'KOSDAQ', 'USD_KRW', 'US_RATE']].ffill().fillna(0)
+        self.drop_features = drop_features if drop_features is not None else []
+        self.mask_scale = mask_scale
 
-        df_stock[FEATURE_COLUMNS] = df_stock[FEATURE_COLUMNS].shift(1)
-        
-        # 결측치 제거 및 정렬
-        df_stock = df_stock.dropna(subset=FEATURE_COLUMNS)
-        df_stock.sort_values('Date', inplace=True)
+        self.global_dropout = nn.Dropout(p=dropout)
 
-        # 학습 데이터 분리: BACKTEST_START_DATE 이전의 TRAIN_YEARS 기간
-        train_cutoff = BACKTEST_START_DATE - pd.DateOffset(years=TRAIN_YEARS)
-        df_train = df_stock[(df_stock['Date'] >= train_cutoff) & (df_stock['Date'] < BACKTEST_START_DATE)]
-        if len(df_train) < SEQ_LEN + FUTURE_N:
-            continue
+        self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
+        self.layernorm = nn.LayerNorm(hidden_size)  # LayerNorm 추가
 
-        # 피처 분리 및 정규화
-        scaler = MinMaxScaler()
-        scaled_continuous = scaler.fit_transform(df_train[CONTINUOUS_COLS])
-        binary_data = df_train[BINARY_COLS].values
-        features_train = np.concatenate([scaled_continuous, binary_data], axis=1)
-        
-        # 타겟 생성 (종가 이용)
-        close_target = df_train['Close'].values
-        
-        # 시퀀스 생성
-        X_train, y_train = prepare_sequences(features_train, close_target, future_n=FUTURE_N, target_percent=TARGET_PERCENT)
-        
-        print(f"[{code}] 시퀀스 수: {len(X_train)}")
-        if len(X_train) < 100:
-            print(f"[{code}] 데이터 샘플 부족으로 제외됨 (샘플 수: {len(X_train)})")
-            continue
-        
-        # 라벨 분포 확인
-        label_counts = np.bincount(np.argmax(y_train, axis=1), minlength=2)
-        print(f"[{code}] 클래스 분포 - 상승: {label_counts[0]}, 하락: {label_counts[1]}")
-        
-        # 모델 생성 
-        def create_model(input_shape):
-            inputs = tf.keras.Input(shape=input_shape)
-            x = tf.keras.layers.GRU(32, return_sequences=False)(inputs)
-            x = tf.keras.layers.Dense(32, activation='gelu')(x)
-            x = tf.keras.layers.Dropout(0.3)(x)
-            outputs = tf.keras.layers.Dense(2, activation='softmax')(x)
-            model = tf.keras.Model(inputs=inputs, outputs=outputs)
-            optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
-            model.compile(optimizer=optimizer,
-                          loss='categorical_crossentropy',
-                          metrics=['accuracy'])
-            return model
+        self.fc1 = nn.Linear(hidden_size, 32)
+        self.gelu = nn.GELU()
+        self.fc2 = nn.Linear(32, 2)
 
-        model = create_model((SEQ_LEN, len(FEATURE_COLUMNS)))
-        
-        # 시계열 데이터 분할: 마지막 fold를 검증셋으로 사용
-        tscv = TimeSeriesSplit(n_splits=8)
-        splits = list(tscv.split(X_train))
-        train_index, val_index = splits[-1]
-        X_train_fold, X_val_fold = X_train[train_index], X_train[val_index]
-        y_train_fold, y_val_fold = y_train[train_index], y_train[val_index]
-        
-        # 콜백 설정
-        callbacks = [
-            ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=20, verbose=1, min_lr=1e-5),
-            EarlyStopping(monitor='val_loss', patience=30, restore_best_weights=True, verbose=1)
-        ]
-        
-        # 모델 학습
-        history = model.fit(
-            X_train_fold, y_train_fold,
-            epochs=EPOCHS,
-            batch_size=BATCH_SIZE,
-            verbose=0,
-            validation_data=(X_val_fold, y_val_fold),
-            callbacks=callbacks
-        )
-        
-        print(f"[{code}] 마지막 학습 loss: {history.history['loss'][-1]:.4f}")
-        if 'val_loss' in history.history:
-            print(f"[{code}] 마지막 검증 loss (val_loss): {history.history['val_loss'][-1]:.4f}")
-        
-        # 손실 곡선 저장
-        loss_dict[code] = (history.history['loss'], history.history.get('val_loss', []))
-        
-        # 모델 및 관련 데이터 저장
-        stock_models[code] = {
-            'df': df_stock,     # 모든 피처가 포함된 데이터
-            'scaler': scaler,   # 정규화 객체 (MinMaxScaler)
-            'model': model,     # 학습된 모델
-            'shares': 0,        # 현재 보유 주식 수 저장 
-            'buy_price': None,  # 현재 보유 포지션의 평균 매수 단가 저장
-            "rolling_true": [], # 예측 성능을 평가하기 위한 실제 라벨 기록
-            "rolling_pred": [], # 최근 예측 라벨 (10일 누적)
-            "daily_scores": []  # 일자별 precision/recall/f1 기록
-        }
-    return stock_models, loss_dict
+    def forward(self, x):
+        # x shape: (batch_size, seq_len, feature_dim)
 
+        if self.drop_features:
+            x = x.clone()
+            for idx in self.drop_features:
+                x[:, :, idx] = x[:, :, idx] * self.mask_scale
 
-""" 상위/하위 손실 곡선 시각화 """
-def plot_loss_curves(loss_curve_dict, top_n=10):
-    loss_summary = []
-    for code, (_, val_loss) in loss_curve_dict.items():
-        if val_loss:
-            final_loss = val_loss[-1]
-            loss_summary.append((code, final_loss))
-    sorted_by_loss = sorted(loss_summary, key=lambda x: x[1])
-    bottom_codes = [code for code, _ in sorted_by_loss[:top_n]]
-    top_codes = [code for code, _ in sorted_by_loss[-top_n:]]
-
-    def plot_group(codes, title, filename):
-        plt.figure(figsize=(10, 5))
-        for code in codes:
-            if code in loss_curve_dict:
-                train_loss, val_loss = loss_curve_dict[code]
-                plt.plot(train_loss, label=f"{code} Train")
-                if val_loss:
-                    plt.plot(val_loss, linestyle='--', label=f"{code} Val")
-        plt.title(title)
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend(fontsize=8)
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
-        plt.close()
-        print(f"[그래프 저장 완료] {filename}")
-
-    plot_group(top_codes, f"Top {top_n} Val Loss 종목 (높은 Val Loss)", "상위 10개 손실 곡선.png")
-    plot_group(bottom_codes, f"Bottom {top_n} Val Loss 종목 (낮은 Val Loss)", "하위 10개 손실 곡선.png")
+        out, _ = self.gru(x)             # (batch, seq_len, hidden_size)
+        out = out[:, -1, :]              # 마지막 시점만
+        out = self.layernorm(out)        # LayerNorm 적용
+        out = self.fc1(out)
+        out = self.gelu(out)
+        out = self.global_dropout(out)
+        out = self.fc2(out)
+        return out
     
-    
-""" 백테스트 함수 """
-def run_backtest(stock_models, global_test_dates):
-    all_portfolio_values = []
-    code_list = list(stock_models.keys())
-    
-    # 초기 자본 설정
-    total_cash = INITIAL_CAPITAL
-    
-    # 매매 수수료(매수/매도) 및 세금
-    FEE_RATE = 0.000140527
-    TAX_RATE = 0.0015
-    
-    # 백테스트 루프
-    for test_date in tqdm(global_test_dates, desc="날짜별 전략 백테스트"):
-        
-        # 투자금 설정
-        day_max_invest = total_cash * 0.1
-        per_stock_max_invest = day_max_invest * 0.1
-        
-        # 매수 후보 종목 
-        buy_candidates = {}
-        
-        # 매수 조건 평가 (매수 관련 조건 및 예측, f1 score 등)
-        for code in code_list:
-            data = stock_models[code]
-            df = data['df']
-            
-            # test_date 이전 데이터만 사용 (과거 SEQ_LEN일치 데이터가 없으면 스킵)
-            df_subset = df[df['Date'] < test_date]
-            if len(df_subset) < SEQ_LEN:
-                continue
-            
-            # 마지막 데이터 이후 FUTURE_N일의 미래 데이터가 존재하는지 확인
-            pos = df.index.get_loc(df_subset.index[-1])
-            if pos + 1 + FUTURE_N >= len(df):
-                continue
-            
-            # 종가 변화량 계산
-            close_yesterday = df_subset['Close'].iloc[-1]
-            close_day_before = df_subset['Close'].iloc[-2]
-            pct_change = (close_yesterday / close_day_before) - 1
-            
-            # RSI, MA 계산
-            if len(df_subset) >= 60:
-                ma20 = df_subset['Close'].rolling(20).mean().iloc[-1]
-                ma60 = df_subset['Close'].rolling(60).mean().iloc[-1]
-                ma20_prev = df_subset['Close'].rolling(20).mean().iloc[-2]
-                ma60_prev = df_subset['Close'].rolling(60).mean().iloc[-2]
-            else:
-                ma20 = None
-                ma60 = None
-            try:
-                rsi_yesterday = df_subset['RSI_b'].dropna().iloc[-1]
-            except IndexError:
-                rsi_yesterday = 50
-                
-            # 모델 예측: 최근 SEQ_LEN일 데이터를 입력으로 사용
-            window_df = df_subset.iloc[-SEQ_LEN:]
-            scaled_cont = data['scaler'].transform(window_df[CONTINUOUS_COLS])
-            binary_data = window_df[BINARY_COLS].values
-            features_input = np.concatenate([scaled_cont, binary_data], axis=1)
-            features_input = np.expand_dims(features_input, axis=0)
-            pred_prob = data['model'].predict(features_input, verbose=0)[0]
-            
-            # f1 score 계산을 위해, 해당 예측에 대한 정답 산출 (예측 시점의 마지막 데이터 기준 FUTURE_N일 뒤)
-            pos = df.index.get_loc(df_subset.index[-1])
-            if pos + 1 + FUTURE_N < len(df):
-                base_price = df['Close'].iloc[pos]
-                future_price = df['Close'].iloc[pos + 1 + FUTURE_N]
-                if future_price > base_price * (1 + TARGET_PERCENT):
-                    true_label = 0
-                elif future_price < base_price * (1 - TARGET_PERCENT):
-                    true_label = 1
-                else:
-                    continue
-            else:
-                continue
-            pred_class = np.argmax(pred_prob)
-            
-            # 누적 저장 (최근 10일치 평가)
-            data.setdefault("rolling_true", []).append(true_label)
-            data.setdefault("rolling_pred", []).append(pred_class)
-            if len(data["rolling_true"]) > 10:
-                data["rolling_true"] = data["rolling_true"][-10:]
-                data["rolling_pred"] = data["rolling_pred"][-10:]
-                
-            # 누적(true/pred) 저장 (전체 백테스트 구간)
-            data.setdefault("cumulative_true", []).append(true_label)
-            data.setdefault("cumulative_pred", []).append(pred_class)
-            
-            if len(data["rolling_true"]) == 10:
-                window_true = data["rolling_true"]
-                window_pred = data["rolling_pred"]
-                precision = precision_score(window_true, window_pred, average='macro', zero_division=0)
-                recall = recall_score(window_true, window_pred, average='macro', zero_division=0)
-                f1_val = f1_score(window_true, window_pred, average='macro', zero_division=0)
-                
-                # 매매 전략용 f1-score (최근 2일 평균)
-                recent_f1_list = [s["f1_score"] for s in data["daily_scores"][-2:]]
-                if len(recent_f1_list) == 2:
-                    data["recent_avg_f1"] = sum(recent_f1_list) / 2
-                
-                # 기록용 성능 저장
-                data.setdefault("daily_scores", []).append({
-                    "date": test_date,
-                    "precision": precision,
-                    "recall": recall,
-                    "f1_score": f1_val
-                })
-            else:
-                data["recent_avg_f1"] = None
-                
-            # 매수 조건 평가 (매수 후보 종목 선정)
-            if ma20 and ma60 and (ma20 > ma20_prev) and (ma60 > ma60_prev) and (pred_prob[0] > BUY_PROB_THRESHOLD) and (pct_change < 0):
-                buy_candidates[code] = {"price": close_yesterday}
-                    
-        # 매도 조건 평가 
-        for code in code_list:
-            data = stock_models[code]
-            # 포지션 보유 여부 확인
-            if data.get("shares", 0) > 0 and data.get("buy_price") is not None:
-                df_subset_sell = data["df"][data["df"]['Date'] < test_date]
-                if len(df_subset_sell) < 1:
-                    continue
-                close_yesterday = df_subset_sell['Close'].iloc[-1]
-                buy_price = data["buy_price"]
-                try:
-                    rsi_yesterday = df_subset_sell['RSI_b'].dropna().iloc[-1]
-                except IndexError:
-                    rsi_yesterday = 50
-                if close_yesterday > buy_price * 1.05:
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "익절"
-                elif close_yesterday <= buy_price * 0.94:
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "손절"
-                elif close_yesterday > buy_price and rsi_yesterday > 55:
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "RSI > 55"
-                else:
-                    # 추가 매도 조건: 예측 기반 매도 및 RSI 조건 (충분한 데이터가 있을 경우만 예측 수행)
-                    if len(df_subset_sell) >= SEQ_LEN:
-                        window_df_sell = df_subset_sell.iloc[-SEQ_LEN:]
-                        scaled_cont_sell = data['scaler'].transform(window_df_sell[CONTINUOUS_COLS])
-                        binary_data_sell = window_df_sell[BINARY_COLS].values
-                        features_input_sell = np.concatenate([scaled_cont_sell, binary_data_sell], axis=1)
-                        features_input_sell = np.expand_dims(features_input_sell, axis=0)
-                        pred_prob_sell = data['model'].predict(features_input_sell, verbose=0)[0]
-                    else:
-                        pred_prob_sell = None
-                    if (pred_prob_sell is not None and close_yesterday > buy_price 
-                        and pred_prob_sell[1] > SELL_PROB_THRESHOLD):
-                        data["sell_candidate"] = 100
-                        data["sell_reason"] = "예측 기반 매도"
-                    else:
-                        data["sell_candidate"] = 0
-                        data["sell_reason"] = None
-                        
-        # 최근 2일간 f1-score 평균 순위가 상위 BOTTOM_N_FOR_SELL_RANK 밖이면 100% 매도 
-        ranking_list = []
-        for code in code_list:
-            recent_avg_f1 = stock_models[code].get("recent_avg_f1")
-            if recent_avg_f1 is not None:
-                ranking_list.append((code, recent_avg_f1))
-        # 내림차순 정렬
-        ranking_list.sort(key=lambda x: x[1], reverse=True)
-        rank_mapping = {}
-        # 정렬된 종목 리스트에 순위 매기기
-        for rank, (code, _) in enumerate(ranking_list, start=1):
-            rank_mapping[code] = rank
-        for code in code_list:
-            data = stock_models[code]
-            shares = data.get("shares", 0)
-            # 기존 매도 조건과 중복 방지
-            if shares > 0 and data.get("sell_candidate", 0) == 0:
-                if code in rank_mapping and rank_mapping[code] > BOTTOM_N_FOR_SELL_RANK:
-                    data["sell_candidate"] = 100
-                    data["sell_reason"] = "f1-score 순위 하위"
-                    
-        # 매도 주문 실행
-        for code in code_list:
-            data = stock_models[code]
-            shares = data.get("shares", 0)
-            if shares > 0:
-                df_subset = data["df"][data["df"]['Date'] < test_date]
-                if len(df_subset) < 1:
-                    continue
-                # 실제 마지막 거래일의 날짜와 종가 사용
-                sell_date_actual = test_date
-                close_yesterday = df_subset['Close'].iloc[-1]
-                sell_percent = data.get("sell_candidate", 0)
-                if sell_percent > 0:
-                    qty_to_sell = int(shares * sell_percent / 100)
-                    if qty_to_sell > 0:
-                        sale_proceeds = qty_to_sell * close_yesterday * (1 - FEE_RATE - TAX_RATE)
-                        total_cash += sale_proceeds
-                        data["shares"] -= qty_to_sell
-                        
-                        # 매도 기록 저장 (포지션 청산 시)
-                        if data["shares"] == 0 and data.get("buy_price") is not None:
-                            # 수수료·세금 반영한 실질 매수가/매도가로 수익률 계산 
-                            profit_pct = (
-                                (close_yesterday * (1 - FEE_RATE - TAX_RATE))
-                                / (data["buy_price"] * (1 + FEE_RATE))
-                            ) - 1
-                            trade_success = True if profit_pct >= TARGET_PERCENT else False
-                            
-                            trade_list = data.setdefault("trade_history", [])
-                            for trade in reversed(trade_list):
-                                if trade.get("sell_date") is None:
-                                    trade["sell_date"] = sell_date_actual
-                                    trade["sell_price"] = close_yesterday
-                                    trade["profit_pct"] = profit_pct
-                                    trade["success"] = trade_success
-                                    trade["sell_reason"] = data.get("sell_reason")
-                                    break
-                            
-                            # 청산 후 초기화
-                            data["buy_price"] = None
-                            
-        # 매수 주문 실행 
-        if buy_candidates:
-            sorted_candidates = sorted(
-                buy_candidates.items(), 
-                key=lambda x: stock_models[x[0]].get("recent_avg_f1", 0) if stock_models[x[0]].get("recent_avg_f1") is not None else 0,
-                reverse=True  
-            )
-            top_buy_candidates = dict(sorted_candidates[:TOP_N_FOR_BUY])
+# ------------------- 학습 함수 -------------------
+def train_model(df_train, early_stopping_patience=3):
+    # --- 1. 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
+    split_idx = int(len(df_train) * 0.7)
+    df_train_feat = df_train.iloc[:split_idx]  # scaler 학습에 사용할 데이터
+
+    scalers = {}
+    if MINMAX_COLS:
+        scalers['minmax'] = MinMaxScaler().fit(df_train_feat[MINMAX_COLS])
+    if STANDARD_COLS:
+        scalers['standard'] = StandardScaler().fit(df_train_feat[STANDARD_COLS])
+
+    # 전체 df_train에 스케일러 적용
+    features = scale_features(df_train, scalers)
+
+    # 시퀀스 및 레이블 생성
+    X_seq, y = prepare_sequences(features, df_train['Close'].values, TARGET_PERCENT)
+    if len(y) < 100:
+        return None, scalers
+
+    # --- 2. train/val split (앞 70%: 학습, 뒤 30%: 검증) ---
+    split_idx = int(len(y) * 0.7)
+    X_train, X_val = X_seq[:split_idx], X_seq[split_idx:]
+    y_train, y_val = y[:split_idx], y[split_idx:]
+
+    train_ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
+    val_ds = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.long))
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+
+    bad_feature_names = []
+    bad_feature_idxs = [FEATURE_COLUMNS.index(name) for name in bad_feature_names if name in FEATURE_COLUMNS]
+
+    model = StockModel(input_size=X_seq.shape[2], drop_features=bad_feature_idxs).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    weight_tensor = torch.tensor([1.0, 1.0]).to(device)
+    criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+
+    best_val_loss = float('inf')
+    best_state = None
+    epochs_no_improve = 0
+
+    for epoch in range(EPOCHS):
+        # --- train ---
+        model.train()
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            optimizer.step()
+
+        # --- validation ---
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                val_loss += criterion(logits, yb).item() * xb.size(0)
+        val_loss /= len(val_ds)
+
+        # scheduler step
+        scheduler.step(val_loss)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            epochs_no_improve = 0
         else:
-            top_buy_candidates = {}
-        for code in top_buy_candidates.keys():
-            data = stock_models[code]
-            price = top_buy_candidates[code]["price"]
-            max_qty = int(per_stock_max_invest // (price * (1 + FEE_RATE)))
-            if max_qty > 0:
-                total_cost = max_qty * price * (1 + FEE_RATE)
-                if total_cost > total_cash:
-                    max_qty = int(total_cash // (price * (1 + FEE_RATE)))
-                    total_cost = max_qty * price * (1 + FEE_RATE)
-                if max_qty > 0:
-                    total_cash -= total_cost
-                    if data.get("shares", 0) > 0 and data.get("buy_price") is not None:
-                        current_shares = data["shares"]
-                        current_buy_price = data["buy_price"]
-                        new_avg = ((current_buy_price * current_shares) + (price * max_qty)) / (current_shares + max_qty)
-                        data["buy_price"] = new_avg
-                    else:
-                        data["buy_price"] = price
-                    data["shares"] = data.get("shares", 0) + max_qty
-                    # 매수 거래 기록 추가 (매수 시점 기록)
-                    data.setdefault("trade_history", []).append({
-                        "buy_date": test_date,
-                        "buy_price": price,
-                        "qty": max_qty,
-                        "sell_date": None,
-                        "sell_price": None,
-                        "profit_pct": None,
-                        "success": None,
-                        "sell_reason": None
-                    })
+            epochs_no_improve += 1
+        if epochs_no_improve >= early_stopping_patience:
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    return model, scalers
+
+# ------------------- 학습, 예측, 평가, 매수 후보 -------------------
+def process_code_for_date(args):
+    code, data, date = args
+    df = data['df'] # 전처리된 주가 데이터
+    
+    # 1) 학습용 기간 설정
+    train_end = date  # 예측 당일 전날까지만 학습에 사용
+    train_start = train_end - pd.DateOffset(years=TRAIN_YEARS) 
+    df_train = df[(df['Date']>=train_start) & (df['Date'] < train_end)]
+
+    # 2) 모델 학습
+    model, scalers = train_model(df_train)
+    if model is None:
+        return code, {}
+
+    # 3) 최신 시퀀스로 예측
+    window = df[df['Date'] < date].tail(SEQ_LEN) # 입력용 데이터 뽑기
+    inp = scale_features(window, scalers) # 정규화 (SEQ_LEN, feature_dim)
+    inp = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device) # PyTorch 텐서로 변환, 배치 차원 추가 (1, SEQ_LEN, feature_dim)
+    # 예측 ([prob_up, prob_down])
+    with torch.no_grad():
+        prob = torch.softmax(model(inp), dim=1).cpu().numpy()[0]
+
+    result = {
+        'model': model,
+        'scalers': scalers,
+        'last_pred_prob': prob
+    }
+
+    # 4) 정답 레이블 
+    subset = df[df['Date'] < date]  # date 하루 전까지 데이터
+    if len(subset) >= 1:
+        base_price = subset.iloc[-1]['Close'] # 1일 전 종가 
+        future_price = df.loc[df['Date'] == date, 'Close'].iloc[0] if date in df['Date'].values else None # 오늘 종가
+        if future_price is not None:
+            # 정답 라벨
+            if future_price >= base_price * (1 + TARGET_PERCENT):
+                true_label = 0
+            elif future_price <= base_price * (1 - TARGET_PERCENT):
+                true_label = 1
+            else:
+                true_label = None
+
+            if true_label is not None:
+                # 예측 threshold로 판단 
+                if prob[0] >= BUY_PROB_THRESHOLD:
+                    pred_class = 0
+                elif prob[1] >= SELL_PROB_THRESHOLD:
+                    pred_class = 1
+                else:
+                    pred_class = None  # 확신 없는 예측은 무시
+                # 2일 전 → 1일 전 변화율, 3일 전 → 2일 전 변화율
+                prev1 = base_price
+                prev2 = subset.iloc[-2]['Close']
+                prev3 = subset.iloc[-3]['Close'] 
+                
+                pct_change   = prev1 / prev2 - 1
+                pct_change_2 = prev2 / prev3 - 1
+
+                result.update({
+                    'true_label': true_label,
+                    'pred_class':  pred_class,
+                    'pct_change':  pct_change,
+                    'pct_change_2': pct_change_2
+                })
                     
-        # 당일 포트폴리오 가치 업데이트
-        total_portfolio_value = total_cash
-        for code in code_list:
-            data = stock_models[code]
-            if data.get("shares", 0) > 0:
-                df_subset = data["df"][data["df"]['Date'] <= test_date]
-                if len(df_subset) > 0:
-                    current_price = df_subset['Close'].iloc[-1]
-                    total_portfolio_value += data["shares"] * current_price
-        all_portfolio_values.append(total_portfolio_value)
-        
-    # 백테스트 루프 종료 후: 강제 청산 처리
-    final_test_date = global_test_dates[-1]
-    for code, data in stock_models.items():
-        if data.get("shares", 0) > 0 and data.get("buy_price") is not None:
-            df_subset = data["df"][data["df"]["Date"] <= final_test_date]
-            if len(df_subset) == 0:
+    # 매수 후보
+    if result.get('last_pred_prob') is not None and result.get('pct_change') is not None:
+        if (result['last_pred_prob'][0] >= BUY_PROB_THRESHOLD):
+            result['buy_candidate'] = {'price': window['Close'].iloc[-1], 'pct_change': result['pct_change']}
+
+    return code, result
+
+# ------------------- 청크 처리 -------------------
+def _process_chunk(codes_chunk, stock_models, date):
+    chunk_results = {}
+    for code in codes_chunk:
+        res_code, res = process_code_for_date((code, stock_models[code], date))
+        if res: # 결과가 있으면 chunk_results에 저장
+            chunk_results[res_code] = res
+    return chunk_results
+
+# ------------------- 백테스트 -------------------
+def run_backtest(preproc_dfs, test_dates):
+    # 각 종목 상태 저장
+    stock_models = {code: {'df': df, 'model': None, 'scalers': None,
+                            'shares': 0, 'buy_price': None,
+                            'true': [], 'pred': [], 'trade_history': []}
+                    for code, df in preproc_dfs.items()}
+    total_cash = INITIAL_CAPITAL
+    portfolio_values = []
+
+    for idx, date in enumerate(tqdm(test_dates, desc='백테스트')):
+        # 종목 리스트를 CHUNK 단위로 나눔
+        codes = list(stock_models.keys())
+        chunks = [codes[i:i+CHUNK] for i in range(0, len(codes), CHUNK)]
+
+        # 각 청크에 대해 joblib으로 병렬 실행
+        results_list = Parallel(
+            n_jobs=N_CORE,      # 사용할 프로세스 개수
+            backend='loky',     # 프로세스 기반 병렬 처리
+            prefer='processes', # 프로세스를 선호
+            batch_size=1        # 각 프로세스가 청크 하나씩만 처리
+        )(delayed(_process_chunk)(chunk, stock_models, date) for chunk in chunks)
+
+        # 결과 병합
+        buy_candidates = {}
+        for res_dict in results_list:
+            for code, res in res_dict.items():
+                # 복사
+                data = stock_models[code]
+                # 모델 & 스케일러
+                data['model'] = res['model']
+                data['scalers'] = res['scalers']
+                data['last_pred_prob'] = res['last_pred_prob']
+                # 정답 & 예측
+                if 'true_label' in res:
+                    data['true'].append(res['true_label'])
+                    data['pred'].append(res['pred_class'])
+                    if 'pred_dates' not in data:
+                        data['pred_dates'] = []
+                    data['pred_dates'].append(date)
+                    if 'probs' not in data:
+                        data['probs'] = []
+                    data['probs'].append(res['last_pred_prob'])                   
+                # buy 후보
+                if 'buy_candidate' in res:
+                    buy_candidates[code] = res['buy_candidate']
+
+        # 1) 매도 시뮬레이션
+        day_max = total_cash * 0.1
+        per_max = day_max * 0.3
+
+        for code, data in stock_models.items():
+            shares = data.get('shares', 0)
+            if shares <= 0 or data.get('buy_price') is None:
                 continue
-            final_trading_date = df_subset["Date"].iloc[-1]
-            final_price = df_subset["Close"].iloc[-1]
-            # 수수료·세금 반영한 실질 매수가/매도가로 수익률 계산 
-            profit_pct = (
-                (final_price * (1 - FEE_RATE - TAX_RATE))
-                / (data["buy_price"] * (1 + FEE_RATE))
-            ) - 1
-            trade_success = True if profit_pct >= TARGET_PERCENT else False
-
-            trade_list = data.setdefault("trade_history", [])
-            for trade in reversed(trade_list):
-                if trade.get("sell_date") is None:
-                    trade["sell_date"] = final_trading_date
-                    trade["sell_price"] = final_price
-                    trade["profit_pct"] = profit_pct
-                    trade["success"] = trade_success
-                    trade["sell_reason"] = "Forced liquidation"
-                    break
+            # 매도 판단을 하는 오늘 날짜 전까지의 데이터를 df_hist에 저장(매도 판단)
+            df_hist = data['df'][data['df']['Date'] < date]
+            if df_hist.empty:
+                continue
+            last_price = df_hist['Close'].iloc[-1]
+            buy_price = data['buy_price']
+            pred_prob = data.get('last_pred_prob')
+            # 초기화
+            sell_pct = 0; reason = None
+            
+            if last_price > buy_price:
+                sell_pct = 100; reason = '이익'                
+            elif last_price < buy_price:
+                sell_pct = 100; reason = '손해'          
+                  
+            # 실제 매도
+            if sell_pct > 0:
+                # 매도 수량
+                qty = int(shares * sell_pct / 100)
+                if qty > 0:
+                    # 매도 금액
+                    proceeds = qty * last_price * (1 - FEE_RATE - TAX_RATE)
+                    total_cash += proceeds
+                    data['shares'] -= qty
+                    profit_pct = (last_price * (1 - FEE_RATE - TAX_RATE)) / (buy_price * (1 + FEE_RATE)) - 1
+                    # 매도 기록 업데이트
+                    for trade in data['trade_history']:
+                        # 아직 매도하지 않은 거래 찾기
+                        if trade.get('sell_date') is None:
+                            # 매도 수량>=보유 수량: 전량 매도 처리
+                            if qty >= trade['qty']:
+                                trade['sell_date'] = date
+                                trade['sell_price'] = last_price
+                                trade['profit_pct'] = profit_pct
+                                trade['sell_reason'] = reason
+                                break
+                            else: # 매도 수량<보유 수량: 부분 매도 처리
+                                trade['qty'] -= qty
+                                data['trade_history'].append({
+                                    'buy_date': trade['buy_date'],
+                                    'buy_price': trade['buy_price'],
+                                    'qty': qty,
+                                    'sell_date': date,
+                                    'sell_price': last_price,
+                                    'profit_pct': profit_pct,
+                                    'sell_reason': reason
+                                })
+                                break
+        # 2) 매수 시뮬레이션
+        if buy_candidates:
+            # 코드 리스트를 확률 순으로 정렬 (높은 확률부터)
+            sorted_codes = sorted(
+                buy_candidates.keys(),
+                key=lambda c: stock_models[c]['last_pred_prob'][0],
+                reverse=True
+            )
+            # 상위 N개 종목만 뽑아서 dict 생성
+            top_buy = {code: buy_candidates[code] for code in sorted_codes[:TOP_N_FOR_BUY]}
+        else:
+            top_buy = {}
+        for code, info in top_buy.items():
+            # 매수 시점 가격(전날 종가)
+            price = info["price"] 
+            # 매수 수량 
+            qty = int(per_max // (price * (1 + FEE_RATE))) 
+            if qty <= 0:
+                continue
+            # 실제 총 매수 비용 계산 (수수료 포함)
+            cost = qty * price * (1 + FEE_RATE) 
+            if cost > total_cash: # 자금 부족 시 총 자본금 한도 내에서 다시 수량 계산
+                qty = int(total_cash // (price * (1 + FEE_RATE)))
+                cost = qty * price * (1 + FEE_RATE)
+            if qty <= 0:
+                continue
+            total_cash -= cost
+            data = stock_models[code] # 해당 종목 데이터 가져오기
+            # 이미 보유 중이라면 평균 단가 새로 계산
+            if data['shares'] > 0 and data['buy_price'] is not None:
+                prev_s, prev_p = data['shares'], data['buy_price']
+                data['buy_price'] = (prev_p * prev_s + price * qty) / (prev_s + qty)
+            else: # 신규 매수라면 그냥 현재 매수 가격으로 설정
+                data['buy_price'] = price
+            data['shares'] += qty
+            data['trade_history'].append({
+                'buy_date': date,
+                'buy_price': price,
+                'qty': qty,
+                'sell_date': None,
+                'sell_price': None,
+                'profit_pct': None,
+                'sell_reason': None
+            })
+        
+        # 3) 강제 청산 (마지막 날짜)
+        if idx == len(test_dates) - 1:
+            for code, data in stock_models.items():
+                shares = data.get('shares', 0)
+                buy_price = data.get('buy_price')
+                # 보유 중일 경우 청산 시작
+                if shares > 0 and buy_price is not None:
+                    # 마지막 날짜 종가
+                    price = data['df'][data['df']['Date'] <= date]['Close'].iloc[-1]
+                    # 전량 매도 시 수익금, 수익률 계산
+                    proceeds = shares * price * (1 - FEE_RATE - TAX_RATE)
+                    total_cash += proceeds
+                    profit_pct = (price * (1 - FEE_RATE - TAX_RATE)) / (buy_price * (1 + FEE_RATE)) - 1
+                    for trade in data['trade_history']:
+                        if trade.get('sell_date') is None:
+                            trade['sell_date'] = date
+                            trade['sell_price'] = price
+                            trade['profit_pct'] = profit_pct
+                            trade['sell_reason'] = '강제청산'
+                    data['shares'] = 0
+                    data['buy_price'] = None
                     
-    return all_portfolio_values
+        # 4) 포트폴리오 가치 업데이트
+        current_value = total_cash
+        for code, data in stock_models.items():
+            shares = data.get('shares', 0)
+            if shares > 0:
+                price = data['df'][data['df']['Date'] <= date]['Close'].iloc[-1] # 현재가
+                current_value += shares * price # 평가금액(보유 수량 * 현재가) 누적
+        portfolio_values.append(current_value)
 
+    return stock_models, portfolio_values
 
-""" 백테스트 결과 시각화 """
-def plot_backtest(stock_models, global_test_dates):
-    total_portfolio = run_backtest(stock_models, global_test_dates)
-    plt.figure(figsize=(14, 6))
-    plt.plot(global_test_dates, total_portfolio, label="총 자산", color='blue')
-    plt.title("날짜 기준 총 자산")
-    plt.xlabel("날짜")
-    plt.ylabel("총 자산 (원)")
+# ------------------- 결과 시각화 및 저장 -------------------
+# 백테스트 결과 시각화
+def plot_backtest_results(dates, values):
+    plt.figure(figsize=(14,6))
+    plt.plot(dates, values, label='총 자산')
+    plt.title('백테스트 기간의 총 자산')
+    plt.xlabel('날짜')
+    plt.ylabel('총 자산 (원)')
     formatter = ticker.FuncFormatter(lambda x, _: f"{int(x):,}")
     plt.gca().yaxis.set_major_formatter(formatter)
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "총 자산.png"), dpi=300)
+    plt.savefig(os.path.join(OUTPUT_DIR, '총 자산.png'), dpi=300)
     plt.close()
-    return total_portfolio
 
-
-""" 평균 성능 CSV 저장 """
-def score_csv(stock_models, loss_curve_dict, filename="성능 지표.csv"):
-    records = []
-    for code, data in stock_models.items():
-        cumulative_true = data.get("cumulative_true", [])
-        cumulative_pred = data.get("cumulative_pred", [])
-        if not cumulative_true or not cumulative_pred:
-            continue
-        precision_cum = precision_score(cumulative_true, cumulative_pred, average='macro', zero_division=0)
-        recall_cum = recall_score(cumulative_true, cumulative_pred, average='macro', zero_division=0)
-        f1_cum = f1_score(cumulative_true, cumulative_pred, average='macro', zero_division=0)
-        
-        # train_loss와 val_loss 추출 
-        train_loss_curve, val_loss_curve = loss_curve_dict.get(code, ([None], []))
-        last_train_loss = round(train_loss_curve[-1], 4) if train_loss_curve else None
-        last_val_loss = round(val_loss_curve[-1], 4) if val_loss_curve else None
-        
-        records.append({
-            "code": code,
-            "cumulative_precision": round(precision_cum, 4),
-            "cumulative_recall": round(recall_cum, 4),
-            "cumulative_f1_score": round(f1_cum, 4),
-            "train_loss": last_train_loss,
-            "val_loss": last_val_loss
-        })
-    if not records:
-        print("[경고] 저장할 평균 성능 데이터가 없습니다.")
-        return
-    df = pd.DataFrame(records)
-    df = df.sort_values(by="cumulative_f1_score", ascending=False)
-    df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding="utf-8-sig")
-    print(f"[CSV 저장 완료] 종목별 누적 성능 → {filename}")
-
-
-""" 거래 성공률 CSV 저장 """
-def success_rate_csv(stock_models, filename="거래 성공률.csv"):
-    records = []
-    for code, data in stock_models.items():
-        trades = data.get("trade_history", [])
-        if not trades:
-            continue
-        # 매도 거래가 기록된 경우만 고려 (sell_date가 존재하는 경우)
-        completed_trades = [t for t in trades if t.get("sell_date") is not None]
-        if not completed_trades:
-            continue
-        success_count = sum(1 for t in completed_trades if t["success"])
-        total_trades = len(completed_trades)
-        avg_profit = sum(t["profit_pct"] for t in completed_trades) / total_trades
-        records.append({
-            "code": code,
-            "total_trades": total_trades,
-            "successful_trades": success_count,
-            "success_rate": round(success_count / total_trades, 4),
-            "avg_profit_pct": round(avg_profit, 4)
-        })
-    if not records:
-        print("[경고] 저장할 거래 성공률 데이터가 없습니다.")
-        return
-    df = pd.DataFrame(records)
-    df = df.sort_values(by="success_rate", ascending=False)
-    df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding="utf-8-sig")
-    print(f"[CSV 저장 완료] 거래 성공률 데이터 → {filename}")
-
-
-""" 매매 로그 CSV 저장 """
+# 매매 로그 CSV 저장
 def trade_log_csv(stock_models, filename="매매 로그.csv"):
-    all_records = []
+    records = []
     for code, data in stock_models.items():
-        trade_history = data.get("trade_history", [])
-        for trade in trade_history:
-            if trade.get("buy_date"):
-                all_records.append({
-                    "code": code,
-                    "buy_date": trade["buy_date"],
-                    "buy_price": trade["buy_price"],
-                    "qty": trade["qty"],
-                    "sell_date": trade["sell_date"],
-                    "sell_price": trade["sell_price"],
-                    "profit_pct": round(trade["profit_pct"] * 100, 2) if trade["profit_pct"] is not None else None,
-                    "success": trade["success"],
-                    "sell_reason": trade.get("sell_reason")
-                })
-    if not all_records:
-        print("[경고] 저장할 매매 로그가 없습니다.")
-        return
-    df = pd.DataFrame(all_records)
-    df.sort_values(by="buy_date", inplace=True)
-    df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding="utf-8-sig")
-    print(f"[CSV 저장 완료] 매매 로그 기록 → {filename}")
-
-
-""" SHAP 분석 함수 """
-def shap_analysis(stock_models):
+        for t in data.get('trade_history', []):
+            records.append({
+                'code': code,
+                'buy_date': t.get('buy_date'),
+                'buy_price': t.get('buy_price'),
+                'sell_date': t.get('sell_date'),
+                'sell_price': t.get('sell_price'),
+                'profit_pct': round(t.get('profit_pct', 0) * 100, 2) if t.get('profit_pct') is not None else None,
+                'sell_reason': t.get('sell_reason')
+            })
+    df = pd.DataFrame(records)
+    if not df.empty and 'buy_date' in df.columns:
+        df = df.sort_values(by='buy_date')  # buy_date 기준으로 오름차순 정렬
+    df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding='utf-8-sig')
     
-    # 매매 기록 추출
-    trade_records = []
-    for code, data in stock_models.items():
-        trade_history = data.get("trade_history", [])
-        for trade in trade_history:
-            if trade.get("buy_date") is not None and trade.get("profit_pct") is not None:
-                trade_records.append({
-                    "code": code,
-                    "buy_date": trade["buy_date"],
-                    "profit_pct": trade["profit_pct"]
-                })
+# 백테스트 기간 Confusion Matrix
+def plot_score(stock_models, filename="backtest_matrix.png"):
+    all_true, all_pred = [], []
+    for data in stock_models.values():
+        true_list = data.get('true', [])
+        pred_list = data.get('pred', [])
+        filtered = [(t, p) for t, p in zip(true_list, pred_list) if t is not None and p is not None]
+        for t, p in filtered:
+            all_true.append(t)
+            all_pred.append(p)
 
-    if not trade_records:
-        print("[SHAP] 매매 기록이 없습니다.")
+    if not all_true:
+        print("유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
         return
 
-    df_trades = pd.DataFrame(trade_records)
+    cm = confusion_matrix(all_true, all_pred, labels=[0, 1])
+    labels = ["상승(0)", "하락(1)"]
+    total = cm.sum()
 
-    top3 = df_trades.sort_values(by="profit_pct", ascending=False).head(3)
-    bottom3 = df_trades.sort_values(by="profit_pct", ascending=True).head(3)
+    # 확장된 행렬: 3x3 (예측 2 + 합계) x (실제 2 + 합계)
+    cm_extended = np.zeros((3, 3), dtype=int)
+    cm_extended[:2, :2] = cm
+    cm_extended[2, :2] = cm.sum(axis=0)         # 열 합계 (실제 기준)
+    cm_extended[:2, 2] = cm.sum(axis=1)         # 행 합계 (예측 기준)
+    cm_extended[2, 2] = total                   # 전체 합계
 
-    if top3.empty and bottom3.empty:
-        print("[SHAP] 선택된 매매 기록이 없습니다.")
-        return
+    # 퍼센트 계산
+    cm_percent = cm_extended / total
 
-    # SHAP heatmap 그리기용 subplot 준비 (3행 2열: 왼쪽 상위, 오른쪽 하위)
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(7, 6))
+    cmap = plt.cm.Blues
 
-    # top3는 왼쪽 열, bottom3는 오른쪽 열
-    trade_groups = [(top3, 0), (bottom3, 1)]
+    for i in range(3):
+        for j in range(3):
+            value = cm_extended[i, j]
+            if i < 2 and j < 2:  # Confusion matrix 부분
+                percent = cm_percent[i, j] * 100
+                color = cmap(cm_percent[i, j])
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, color=color))
+                ax.text(j + 0.5, i + 0.5, f"{value} ({percent:.1f}%)", 
+                        va='center', ha='center', fontsize=11, color='black')
+            else:  # 합계 영역
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black'))
+                ax.text(j + 0.5, i + 0.5, f"{value}", 
+                        va='center', ha='center', fontsize=11, fontweight='bold')
 
-    for group, col in trade_groups:
-        for row, (_, trade) in enumerate(group.iterrows()):
-            code = trade["code"]
-            buy_date = trade["buy_date"]
-            profit_pct = trade["profit_pct"]
-            data = stock_models.get(code)
-            if data is None:
-                continue
-
-            df_stock = data["df"]
-            scaler = data["scaler"]
-            model = data["model"]
-
-            # SHAP 값을 계산할 때 사용할 입력 시퀀스 (매수일 직전 SEQ_LEN일)
-            df_seq = df_stock[df_stock["Date"] < buy_date].tail(SEQ_LEN)
-            if len(df_seq) < SEQ_LEN:
-                print(f"[SHAP] {code}의 {buy_date} 이전 시퀀스 부족")
-                continue
-            scaled_cont = scaler.transform(df_seq[CONTINUOUS_COLS])
-            binary_data = df_seq[BINARY_COLS].values
-            X_input = np.concatenate([scaled_cont, binary_data], axis=1)
-            X_input = np.expand_dims(X_input, axis=0)
-
-            # 배경 데이터: 학습 구간에서 무작위 시퀀스 10개 샘플링
-            train_cutoff = BACKTEST_START_DATE - pd.DateOffset(years=TRAIN_YEARS)
-            df_train = df_stock[(df_stock["Date"] >= train_cutoff) & (df_stock["Date"] < buy_date)]
-            if len(df_train) < SEQ_LEN + 10:
-                print(f"[SHAP] {code}의 배경 학습 시퀀스 부족")
-                continue
-            
-            scaled_cont_train = scaler.transform(df_train[CONTINUOUS_COLS])
-            binary_data_train = df_train[BINARY_COLS].values
-            features_matrix_train = np.concatenate([scaled_cont_train, binary_data_train], axis=1)
-            
-            # 생성 가능한 시퀀스의 개수
-            num_seq = len(features_matrix_train) - SEQ_LEN + 1
-            if num_seq < 10:
-                print(f"[SHAP] {code}의 배경 시퀀스 부족")
-                continue
-            
-            # 생성 가능한 시퀀스 인덱스 범위 내에서 10개 무작위 선택
-            rand_indices = np.random.choice(num_seq, size=10, replace=False)
-            background_data = np.array([
-                features_matrix_train[i:i + SEQ_LEN] for i in rand_indices
-            ])
-
-            # SHAP 계산
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=UserWarning)
-                explainer = shap.GradientExplainer(model, background_data)
-                shap_values = explainer.shap_values(X_input)
-
-            shap_vals = shap_values[0] if isinstance(shap_values, list) else shap_values
-            if shap_vals.ndim == 4 and shap_vals.shape[-1] == 2:
-                shap_vals = shap_vals[..., 0]
-            shap_matrix = shap_vals[0]
-
-            # heatmap 출력
-            ax = axes[row, col]
-            sns.heatmap(
-                shap_matrix.T, cmap="coolwarm", center=0,
-                xticklabels=[f"T{i}" for i in range(SEQ_LEN)],
-                yticklabels=FEATURE_COLUMNS,
-                ax=ax
-            )
-            ax.set_title(f"{code} | {buy_date.date()} | 수익률: {profit_pct:.2%}")
-
+    # 축 설정
+    ax.set_xticks([0.5, 1.5, 2.5])
+    ax.set_yticks([0.5, 1.5, 2.5])
+    ax.set_xticklabels(labels + ['합계'], fontsize=11)
+    ax.set_yticklabels(labels + ['합계'], fontsize=11)
+    ax.set_xlim(0, 3)
+    ax.set_ylim(0, 3)
+    ax.invert_yaxis()
+    ax.set_title('백테스트 기간 Confusion Matrix', fontsize=14)
+    ax.set_xlabel('실제 라벨', fontsize=12)
+    ax.set_ylabel('예측 라벨', fontsize=12)
     plt.tight_layout()
-    heatmap_path = os.path.join(OUTPUT_DIR, "shap_heatmap.png")
-    plt.savefig(heatmap_path, dpi=300)
+    plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
-    print(f"[SHAP] shap_heatmap.png 저장 완료")
 
-
-""" 메인 함수 """
+# ------------------- 메인 -------------------
 def main():
-    engine = get_engine()
-    top_codes = get_distinct_codes(engine, limit=STOCK_NUMBER)
-    print(f"\n[백테스트 시작] 대상 종목 수: {len(top_codes)}개")
-    stock_models, loss_curve_dict = prepare_stock_models(engine, top_codes)
-    print(f"[학습 완료] 사용 가능한 종목 수: {len(stock_models)}")
+    # 1) db 연결
+    eng = get_engine()
+    # 2) 종목 리스트 로딩
+    codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {STOCK_NUMBER}", eng)['Code'].tolist()
     
-    plot_loss_curves(loss_curve_dict, top_n=10)
-    plot_backtest(stock_models, global_test_dates)
-    score_csv(stock_models, loss_curve_dict)
-    success_rate_csv(stock_models)
-    trade_log_csv(stock_models)   
-    shap_analysis(stock_models)
+    # 3) 전체 종목 데이터 로딩 및 전처리 
+    market_idx_df = load_market_index(eng)
+    preproc_dfs = {}
+    for code in codes:
+        df_stock = load_stock_data(code, eng)
+        df_full = df_stock.merge(market_idx_df, on='Date', how='left')
+        preproc_dfs[code] = engineer_features(df_full)
+    
+    # 4) 백테스트 날짜 구간 설정
+    dates_df = pd.read_sql(f"SELECT Date FROM stock_data WHERE Code='{codes[0]}' ORDER BY Date", eng, parse_dates=['Date'])
+    start_idx = dates_df[dates_df['Date'] >= BACKTEST_START_DATE].index[0]
+    test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
 
+    # 5) 백테스트 실행
+    stock_models, portfolio_values = run_backtest(preproc_dfs, test_dates)
 
-""" 메인 함수 실행 """
-if __name__ == "__main__":
+    # 6) 결과 저장
+    plot_backtest_results(test_dates, portfolio_values)
+    plot_score(stock_models)
+    trade_log_csv(stock_models)
+    
+    print("백테스트 및 후처리 완료")
+
+if __name__ == '__main__':
     main()
