@@ -90,6 +90,64 @@ def backtest():
 def home():
     return render_template("home.html")
 
+@app.route("/save-portfolio", methods=["POST"])
+def save_portfolio():
+    Portfolio.query.delete()
+    for i in range(5):
+        ticker = request.form.get(f"ticker{i}")
+        weight = request.form.get(f"weight{i}")
+        if ticker and weight:
+            db.session.add(Portfolio(ticker=ticker, weight=float(weight)))
+    db.session.commit()
+    return redirect("/portfolio")  # 또는 "/home" 등 리디렉션 대상 경로
+
+@app.route("/portfolio-data")
+def portfolio_data():
+    base_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
+
+    # 포트폴리오 비중 데이터
+    pie_path = os.path.join(base_dir, "포트폴리오 비중.csv")
+    if os.path.exists(pie_path):
+        df_pie = pd.read_csv(pie_path)
+    else:
+        df_pie = pd.DataFrame({"ticker": ["삼성전자", "현대차"], "weight": [50, 50]})
+
+    # 누적 수익률
+    perf_path = os.path.join(base_dir, "누적 수익률.csv")
+    if os.path.exists(perf_path):
+        df_perf = pd.read_csv(perf_path)
+        df_perf = df_perf.sort_values(by=df_perf.columns[0])
+        perf_labels = df_perf.iloc[:, 0].tolist()
+        perf_values = df_perf.iloc[:, 1].tolist()
+    else:
+        perf_labels = ["1월", "2월", "3월", "4월", "5월"]
+        perf_values = [0, 5, 10, 12, 15]
+
+    # 월별 수익률
+    heatmap_path = os.path.join(base_dir, "월별 수익률.csv")
+    if os.path.exists(heatmap_path):
+        df_heatmap = pd.read_csv(heatmap_path)
+        heatmap_labels = df_heatmap.iloc[:, 0].tolist()
+        heatmap_values = df_heatmap.iloc[:, 1].tolist()
+    else:
+        heatmap_labels = ["1월", "2월", "3월", "4월", "5월"]
+        heatmap_values = [2, -1, 3, 0, 4]
+
+    return jsonify({
+        "pie": {
+            "labels": df_pie["ticker"].tolist(),
+            "values": df_pie["weight"].tolist()
+        },
+        "performance": {
+            "labels": perf_labels,
+            "values": perf_values
+        },
+        "heatmap": {
+            "labels": heatmap_labels,
+            "values": heatmap_values
+        }
+    })
+
 @app.route('/run-backtest', methods=['POST'])
 def run_backtest():
     try:
