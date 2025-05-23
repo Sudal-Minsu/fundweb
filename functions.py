@@ -15,6 +15,8 @@ def get_api_keys():
     """저장된 API 키를 불러오는 함수"""
     app_key = keyring.get_password('mock_app_key', '고민수')
     app_secret = keyring.get_password('mock_app_secret', '고민수')
+    print("✅ app_key:", app_key)
+    print("✅ app_secret:", app_secret)
     return app_key, app_secret
 
 # 🔹 접근토큰 발급
@@ -31,6 +33,7 @@ def get_access_token(app_key, app_secret):
     }
 
     res = requests.post(url, headers=headers, data=json.dumps(body))
+    print("🔐 토큰 응답 전체:", res.json())
     return res.json().get("access_token", "")
 
 # 🔹 토큰 매니저
@@ -47,9 +50,6 @@ def get_auth_info():
     # 새로 발급
     app_key, app_secret = get_api_keys()
     access_token = get_access_token(app_key, app_secret)
-    print("✅ access_token:", access_token)
-    print("✅ app_key:", app_key)
-    print("✅ app_secret:", app_secret)
     cache = {
         "token": access_token,
         "timestamp": time.time(),
