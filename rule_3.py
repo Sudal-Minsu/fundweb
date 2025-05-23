@@ -54,3 +54,4 @@ def auto_trading_loop(
         # 4. 다음 매매까지 대기
         time.sleep(interval_sec)
 
+auto_trading_loop("005930", interval_sec=60)

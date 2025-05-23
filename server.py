@@ -28,29 +28,29 @@ with app.app_context():
 
 trading_thread = None
 
-@app.route('/ping')
-def ping():
-    global trading_thread
-
-    if trading_thread is None or not trading_thread.is_alive():
-        print("🔁 트레이딩 스레드 시작")
-        trading_thread = threading.Thread(
-            target=auto_trading_loop,
-            args=("005930",),
-            kwargs={"interval_sec": 60}
-        )
-        trading_thread.daemon = True
-        trading_thread.start()
-
-    # ✅ 거래 내역 조회
-    try:
-        df = read_trades_mysql("trade_history")
-        trades = df.to_dict(orient="records")
-    except Exception as e:
-        print(f"❌ DB 조회 실패: {e}")
-        trades = []
-
-    return render_template("ping.html", trades=trades)
+#@app.route('/ping')
+#def ping():
+#    global trading_thread
+#
+#    if trading_thread is None or not trading_thread.is_alive():
+#        print("🔁 트레이딩 스레드 시작")
+#        trading_thread = threading.Thread(
+#            target=auto_trading_loop,
+#            args=("005930",),
+#            kwargs={"interval_sec": 60}
+#        )
+#        trading_thread.daemon = True
+#        trading_thread.start()
+#
+#    # ✅ 거래 내역 조회
+#    try:
+#        df = read_trades_mysql("trade_history")
+#        trades = df.to_dict(orient="records")
+#    except Exception as e:
+#        print(f"❌ DB 조회 실패: {e}")
+#        trades = []
+#
+#    return render_template("ping.html", trades=trades)
 
 
 
