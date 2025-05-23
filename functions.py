@@ -171,13 +171,12 @@ def execute_order(stock_code, quantity, order_type, order_style, app_key, app_se
 
 
 def check_account(access_token, app_key, app_secret):
-
     output1 = []
     output2 = []
     CTX_AREA_NK100 = ''
     url_base = "https://openapivts.koreainvestment.com:29443"
-    while True:
 
+    while True:
         path = "/uapi/domestic-stock/v1/trading/inquire-balance"
         url = f"{url_base}/{path}"
 
@@ -202,19 +201,33 @@ def check_account(access_token, app_key, app_secret):
             "CTX_AREA_FK100": '',
             "CTX_AREA_NK100": CTX_AREA_NK100
         }
+
         res = requests.get(url, headers=headers, params=params)
         print("📡 응답 상태코드:", res.status_code)
-        print("📡 응답 헤더:", res.headers)
-        print("📡 응답 본문 일부:", res.text[:500])
-        output1.append(pd.DataFrame.from_records(res.json()['output1']))
-        
-        CTX_AREA_NK100 = res.json()['ctx_area_nk100'].strip()
+        print("📡 응답 본문 일부:", res.text[:300])
+
+        try:
+            data = res.json()
+        except Exception:
+            print("❌ JSON 파싱 실패:", res.text[:300])
+            return None, None
+
+        if data.get("rt_cd") != "0" or "output1" not in data:
+            print("❌ API 실패: 토큰이 만료되었거나, 권한 문제가 있습니다.")
+            # 캐시된 토큰 삭제
+            if os.path.exists("access_token.json"):
+                os.remove("access_token.json")
+                print("🗑️ 캐시된 토큰 삭제 완료")
+            return None, None
+
+        output1.append(pd.DataFrame.from_records(data['output1']))
+        CTX_AREA_NK100 = data.get('ctx_area_nk100', '').strip()
 
         if CTX_AREA_NK100 == '':
-            output2.append(res.json()['output2'][0])
+            output2.append(data.get('output2', [{}])[0])
             break
 
-    if not output1[0].empty:
+    if output1 and not output1[0].empty:
         res1 = pd.concat(output1)[['pdno', 'hldg_qty', 'pchs_avg_pric']].rename(columns={
             'pdno': '종목코드',
             'hldg_qty': '보유수량',
@@ -223,9 +236,10 @@ def check_account(access_token, app_key, app_secret):
     else:
         res1 = pd.DataFrame(columns=['종목코드', '보유수량', '매입단가'])
 
-    res2 = output2[0]
-    
+    res2 = output2[0] if output2 else {}
+
     return [res1, res2]
+
 
 
 
