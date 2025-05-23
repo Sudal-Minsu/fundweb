@@ -200,6 +200,9 @@ def check_account(access_token, app_key, app_secret):
             "CTX_AREA_NK100": CTX_AREA_NK100
         }
         res = requests.get(url, headers=headers, params=params)
+        print("📡 응답 상태코드:", res.status_code)
+        print("📡 응답 헤더:", res.headers)
+        print("📡 응답 본문 일부:", res.text[:500])
         output1.append(pd.DataFrame.from_records(res.json()['output1']))
         
         CTX_AREA_NK100 = res.json()['ctx_area_nk100'].strip()
