@@ -204,7 +204,6 @@ def check_account(access_token, app_key, app_secret):
 
         res = requests.get(url, headers=headers, params=params)
         print("📡 응답 상태코드:", res.status_code)
-        print("📡 응답 본문 일부:", res.text[:300])
 
         try:
             data = res.json()
