@@ -47,6 +47,9 @@ def get_auth_info():
     # 새로 발급
     app_key, app_secret = get_api_keys()
     access_token = get_access_token(app_key, app_secret)
+    print("✅ access_token:", access_token)
+    print("✅ app_key:", app_key)
+    print("✅ app_secret:", app_secret)
     cache = {
         "token": access_token,
         "timestamp": time.time(),
