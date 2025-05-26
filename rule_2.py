@@ -330,7 +330,7 @@ def prepare_sequences(features, close_prices):
     max_i = len(features) - SEQ_LEN 
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일전
         future_price = close_prices[i + SEQ_LEN] # 오늘
         if future_price >= base_price * (1 + UP_TARGET_PERCENT):
             label = 0  # 상승
