@@ -14,23 +14,24 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import confusion_matrix
 from joblib import Parallel, delayed
 import multiprocessing as mp
+import hashlib, struct
 from config import DB_CONFIG
-
 # ------------------- 설정 -------------------
 SEQ_LEN = 5
 TRAIN_YEARS = 12
-TEST_PERIOD_DAYS = 60
-TARGET_PERCENT = 0.01
+TEST_PERIOD_DAYS = 200
+UP_TARGET_PERCENT = 0.02
+DOWN_TARGET_PERCENT = 0.02
 LEARNING_RATE = 0.001
 EPOCHS = 20
 BATCH_SIZE = 32
 INITIAL_CAPITAL = 100_000_000
-BUY_PROB_THRESHOLD = 0.7
-SELL_PROB_THRESHOLD = 0.7
-TOP_N_FOR_BUY = 3
+UP_PROB_THRESHOLD = 0.65
+DOWN_PROB_THRESHOLD = 0.65
+TOP_N_FOR_BUY = 5
 BOTTOM_N_FOR_SELL_RANK = 190
 FEE_RATE = 0.000140527
-TAX_RATE = 0.0015
+TAX_RATE = 0.0018
 BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 STOCK_NUMBER = 200
 
@@ -45,6 +46,16 @@ plt.rcParams['axes.unicode_minus'] = False
 # 출력 폴더 설정
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
+torch.use_deterministic_algorithms(True)
+
+def code_to_seed(code: str, base=42):
+    # MD5 해시 → int → % 10_000_000
+    h = hashlib.md5(code.encode('utf-8')).digest()
+    return base + (struct.unpack_from(">I", h)[0] % 10_000_000)
 
 # 고정 시드 설정
 np.random.seed(42)
@@ -198,6 +209,7 @@ def compute_rsi(series, period):
 
 # ------------------- 전처리 공통 -------------------
 def engineer_features(df):
+    df = df.sort_values('Date').reset_index(drop=True)
     # --- 기본 정리 ---
     df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
     df['LogVolume'] = np.log1p(df['Volume'])
@@ -313,16 +325,16 @@ def engineer_features(df):
     return df
 
 # ------------------- 시퀀스 생성 함수 -------------------
-def prepare_sequences(features, close_prices, target_percent):
+def prepare_sequences(features, close_prices):
     sequences, targets = [], []
     max_i = len(features) - SEQ_LEN 
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
         base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
         future_price = close_prices[i + SEQ_LEN] # 오늘
-        if future_price >= base_price * (1 + target_percent):
+        if future_price >= base_price * (1 + UP_TARGET_PERCENT):
             label = 0  # 상승
-        elif future_price <= base_price * (1 - target_percent):
+        elif future_price <= base_price * (1 - DOWN_TARGET_PERCENT):
             label = 1  # 하락
         else:
             continue
@@ -332,35 +344,34 @@ def prepare_sequences(features, close_prices, target_percent):
 
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
-    def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None, mask_scale=0.3):
+    def __init__(self, input_size, hidden_size=32, dropout=0.3):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.seq_len = SEQ_LEN
 
-        self.drop_features = drop_features if drop_features is not None else []
-        self.mask_scale = mask_scale
-
         self.global_dropout = nn.Dropout(p=dropout)
-
         self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
-        self.layernorm = nn.LayerNorm(hidden_size)  # LayerNorm 추가
+
+        # attention layers
+        self.attn_linear = nn.Linear(hidden_size, hidden_size)
+        self.attn_vector = nn.Linear(hidden_size, 1, bias=False)
+        self.layernorm = nn.LayerNorm(hidden_size)
 
         self.fc1 = nn.Linear(hidden_size, 32)
         self.gelu = nn.GELU()
         self.fc2 = nn.Linear(32, 2)
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, feature_dim)
+        # x: (batch, seq_len, feature_dim)
+        gru_out, _ = self.gru(x)  # (batch, seq_len, hidden)
+        
+        attn_scores = torch.tanh(self.attn_linear(gru_out))      
+        attn_scores = self.attn_vector(attn_scores).squeeze(-1)  
+        attn_weights = torch.softmax(attn_scores, dim=1).unsqueeze(-1)  
+        context = torch.sum(gru_out * attn_weights, dim=1)       
 
-        if self.drop_features:
-            x = x.clone()
-            for idx in self.drop_features:
-                x[:, :, idx] = x[:, :, idx] * self.mask_scale
-
-        out, _ = self.gru(x)             # (batch, seq_len, hidden_size)
-        out = out[:, -1, :]              # 마지막 시점만
-        out = self.layernorm(out)        # LayerNorm 적용
+        out = self.layernorm(context)
         out = self.fc1(out)
         out = self.gelu(out)
         out = self.global_dropout(out)
@@ -368,7 +379,13 @@ class StockModel(nn.Module):
         return out
     
 # ------------------- 학습 함수 -------------------
-def train_model(df_train, early_stopping_patience=3):
+def train_model(df_train, early_stopping_patience=3, code=None):
+    
+    # 종목별 시드 설정 (같은 종목이면 항상 같은 시드)
+    seed = code_to_seed(code)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    
     # --- 1. 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
     split_idx = int(len(df_train) * 0.7)
     df_train_feat = df_train.iloc[:split_idx]  # scaler 학습에 사용할 데이터
@@ -383,7 +400,7 @@ def train_model(df_train, early_stopping_patience=3):
     features = scale_features(df_train, scalers)
 
     # 시퀀스 및 레이블 생성
-    X_seq, y = prepare_sequences(features, df_train['Close'].values, TARGET_PERCENT)
+    X_seq, y = prepare_sequences(features, df_train['Close'].values)
     if len(y) < 100:
         return None, scalers
 
@@ -394,13 +411,12 @@ def train_model(df_train, early_stopping_patience=3):
 
     train_ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
     val_ds = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.long))
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    g = torch.Generator()
+    g.manual_seed(seed + 12345)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, generator=g)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
-
-    bad_feature_names = []
-    bad_feature_idxs = [FEATURE_COLUMNS.index(name) for name in bad_feature_names if name in FEATURE_COLUMNS]
-
-    model = StockModel(input_size=X_seq.shape[2], drop_features=bad_feature_idxs).to(device)
+    
+    model = StockModel(input_size=X_seq.shape[2]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     weight_tensor = torch.tensor([1.0, 1.0]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
@@ -452,70 +468,62 @@ def process_code_for_date(args):
     df = data['df'] # 전처리된 주가 데이터
     
     # 1) 학습용 기간 설정
-    train_end = date  # 예측 당일 전날까지만 학습에 사용
-    train_start = train_end - pd.DateOffset(years=TRAIN_YEARS) 
-    df_train = df[(df['Date']>=train_start) & (df['Date'] < train_end)]
+    train_end = date # 예측 당일 전날까지만 학습에 사용
+    train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
+    df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
     # 2) 모델 학습
-    model, scalers = train_model(df_train)
+    model, scalers = train_model(df_train, code=code)
     if model is None:
         return code, {}
 
     # 3) 최신 시퀀스로 예측
     window = df[df['Date'] < date].tail(SEQ_LEN) # 입력용 데이터 뽑기
-    inp = scale_features(window, scalers) # 정규화 (SEQ_LEN, feature_dim)
+    inp = scale_features(window, scalers) # 정규화(SEQ_LEN, feature_dim)
     inp = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device) # PyTorch 텐서로 변환, 배치 차원 추가 (1, SEQ_LEN, feature_dim)
-    # 예측 ([prob_up, prob_down])
+    # 예측([prob_up, prob_down])
+    model.eval()
     with torch.no_grad():
         prob = torch.softmax(model(inp), dim=1).cpu().numpy()[0]
 
-    result = {
-        'model': model,
-        'scalers': scalers,
-        'last_pred_prob': prob
-    }
+    result = {'model': model, 'scalers': scalers, 'last_pred_prob': prob}
 
-    # 4) 정답 레이블 
-    subset = df[df['Date'] < date]  # date 하루 전까지 데이터
-    if len(subset) >= 1:
-        base_price = subset.iloc[-1]['Close'] # 1일 전 종가 
-        future_price = df.loc[df['Date'] == date, 'Close'].iloc[0] if date in df['Date'].values else None # 오늘 종가
-        if future_price is not None:
-            # 정답 라벨
-            if future_price >= base_price * (1 + TARGET_PERCENT):
-                true_label = 0
-            elif future_price <= base_price * (1 - TARGET_PERCENT):
-                true_label = 1
-            else:
-                true_label = None
+    subset = df[df['Date'] < date] # date 하루 전까지 데이터
+    if len(subset) >= 3:
+        # 2일 전 → 1일 전 변화율, 3일 전 → 2일 전 변화율 
+        prev1 = subset.iloc[-1]['Close']
+        prev2 = subset.iloc[-2]['Close']
+        prev3 = subset.iloc[-3]['Close']
+        pct_change = prev1 / prev2 - 1
+        pct_change_2 = prev2 / prev3 - 1
+        result.update({'pct_change': pct_change, 'pct_change_2': pct_change_2})
 
-            if true_label is not None:
-                # 예측 threshold로 판단 
-                if prob[0] >= BUY_PROB_THRESHOLD:
-                    pred_class = 0
-                elif prob[1] >= SELL_PROB_THRESHOLD:
-                    pred_class = 1
-                else:
-                    pred_class = None  # 확신 없는 예측은 무시
-                # 2일 전 → 1일 전 변화율, 3일 전 → 2일 전 변화율
-                prev1 = base_price
-                prev2 = subset.iloc[-2]['Close']
-                prev3 = subset.iloc[-3]['Close'] 
-                
-                pct_change   = prev1 / prev2 - 1
-                pct_change_2 = prev2 / prev3 - 1
+    # 정답 라벨 
+    if date in df['Date'].values:
+        future_price = df.loc[df['Date'] == date, 'Close'].iloc[0]
+        base_price = subset.iloc[-1]['Close'] # 1일 전 종가
+        true_label = None
+        # 정답 라벨
+        if future_price > base_price:
+            true_label = 0
+        elif future_price < base_price:
+            true_label = 1
 
-                result.update({
-                    'true_label': true_label,
-                    'pred_class':  pred_class,
-                    'pct_change':  pct_change,
-                    'pct_change_2': pct_change_2
-                })
-                    
-    # 매수 후보
-    if result.get('last_pred_prob') is not None and result.get('pct_change') is not None:
-        if (result['last_pred_prob'][0] >= BUY_PROB_THRESHOLD):
-            result['buy_candidate'] = {'price': window['Close'].iloc[-1], 'pct_change': result['pct_change']}
+        if true_label is not None:
+            pred_class = None # 확신 없는 예측은 무시
+            # 예측 threshold로 판단
+            if prob[0] > UP_PROB_THRESHOLD:
+                pred_class = 0
+            elif prob[1] > DOWN_PROB_THRESHOLD:
+                pred_class = 1
+            result.update({'true_label': true_label, 'pred_class': pred_class})
+
+    # 매수 후보 판단 (실전 기준)
+    if prob[0] > UP_PROB_THRESHOLD:
+        result['buy_candidate'] = {
+            'price': window['Close'].iloc[-1],
+            'pct_change': result['pct_change']
+        }
 
     return code, result
 
@@ -577,7 +585,7 @@ def run_backtest(preproc_dfs, test_dates):
 
         # 1) 매도 시뮬레이션
         day_max = total_cash * 0.1
-        per_max = day_max * 0.3
+        per_max = day_max * 0.2
 
         for code, data in stock_models.items():
             shares = data.get('shares', 0)
@@ -805,7 +813,7 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
 
-# 오늘 매수후보 리스트 
+# 오늘 매수후보 리스트 생성
 def predict_today_candidates(engine=None):
     today_date = pd.Timestamp.today().normalize()
 
@@ -827,7 +835,7 @@ def predict_today_candidates(engine=None):
             train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
             df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
-            model, scalers = train_model(df_train)
+            model, scalers = train_model(df_train, code=code)
             if model is None:
                 continue
 
@@ -837,11 +845,12 @@ def predict_today_candidates(engine=None):
 
             inp = scale_features(window, scalers)
             inp_tensor = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device)
-
+            
+            model.eval()
             with torch.no_grad():
                 prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-            if prob[0] >= BUY_PROB_THRESHOLD:
+            if prob[0] >= UP_PROB_THRESHOLD:
                 buy_candidates.append({
                     'code': code,
                     'prob_up': prob[0],
@@ -855,11 +864,12 @@ def predict_today_candidates(engine=None):
 
     top_candidates = sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
     return top_candidates[:TOP_N_FOR_BUY]
-
+        
 # ------------------- 메인 -------------------
 def main():
     # 1) db 연결
     eng = get_engine()
+    
     # 2) 종목 리스트 로딩
     codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {STOCK_NUMBER}", eng)['Code'].tolist()
     
