@@ -39,9 +39,7 @@ N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
 CHUNK = 20  # 워커당 묶을 종목 수
 
 # 폰트 설정
-font_path = "C:/Windows/Fonts/malgun.ttf"
-font_name = fm.FontProperties(fname=font_path).get_name()
-plt.rcParams['font.family'] = font_name
+plt.rcParams['font.family'] = 'NanumGothic'
 plt.rcParams['axes.unicode_minus'] = False
 
 # 출력 폴더 설정
