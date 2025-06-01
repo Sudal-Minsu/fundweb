@@ -1,8 +1,8 @@
 import os
+import random
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import matplotlib.font_manager as fm
 from tqdm import tqdm
 from sqlalchemy import create_engine
@@ -11,27 +11,24 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.metrics import confusion_matrix
 from joblib import Parallel, delayed
 import multiprocessing as mp
 import hashlib, struct
 from config import DB_CONFIG
+
 # ------------------- 설정 -------------------
 SEQ_LEN = 5
 TRAIN_YEARS = 12
-TEST_PERIOD_DAYS = 200
+TEST_PERIOD_DAYS = 250
 UP_TARGET_PERCENT = 0.02
 DOWN_TARGET_PERCENT = 0.02
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0005
 EPOCHS = 20
 BATCH_SIZE = 32
-INITIAL_CAPITAL = 100_000_000
 UP_PROB_THRESHOLD = 0.65
 DOWN_PROB_THRESHOLD = 0.65
-TOP_N_FOR_BUY = 5
-BOTTOM_N_FOR_SELL_RANK = 190
-FEE_RATE = 0.000140527
-TAX_RATE = 0.0018
+UP_END = 1.1
+DOWN_END = 1.1
 BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 STOCK_NUMBER = 200
 
@@ -40,24 +37,30 @@ N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
 CHUNK = 20  # 워커당 묶을 종목 수
 
 # 폰트 설정
-plt.rcParams['font.family'] = 'NanumGothic'
+font_path = "C:/Windows/Fonts/malgun.ttf"
+font_name = fm.FontProperties(fname=font_path).get_name()
+plt.rcParams['font.family'] = font_name
 plt.rcParams['axes.unicode_minus'] = False
 
 # 출력 폴더 설정
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# 병렬 환경의 비결정성 방지
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
+# PyTorch 결정적 알고리즘 사용
 torch.use_deterministic_algorithms(True)
 
+# 종목 코드별로 항상 같은 시드를 생성하기 위한 해시 기반 시드 함수
 def code_to_seed(code: str, base=42):
     # MD5 해시 → int → % 10_000_000
     h = hashlib.md5(code.encode('utf-8')).digest()
     return base + (struct.unpack_from(">I", h)[0] % 10_000_000)
 
 # 고정 시드 설정
+random.seed(42)
 np.random.seed(42)
 
 # 장치 설정
@@ -96,7 +99,7 @@ STANDARD_COLS = [
     'MACD_Histogram_Slope', 
     # RSI
     'RSI_Slope', 
-    # 거시 지표 변화량
+    # 거시 지표 변화량 
     'USD_KRW_RET',
     'USD_KRW_Momentum',
     'USD_KRW_DEVIATION',
@@ -109,21 +112,21 @@ STANDARD_COLS = [
     # 최근 고점/저점 대비
     'Price_vs_high_20d',
     'Price_vs_low_20d',
-    # 시장 간 스프레드
+    # 시장 간 스프레드 
     'KOSPI_vs_KOSDAQ', 
 ]
 
 MINMAX_COLS = [
     # 레벨 값
     'Close',
-    'LogVolume',
-    'TradingValue',
+    'LogVolume', 
+    'TradingValue', 
     'TradingValue_Ratio', 
     # 수준 지표
     'RSI_n',
-    'KOSPI',
-    'KOSDAQ',
-    'USD_KRW',
+    'KOSPI', 
+    'KOSDAQ', 
+    'USD_KRW', 
     'USD_KRW_MA_5', 
     # 밴드/확률형 지표 (0~1 or 0~100)
     'BB_PCT',
@@ -150,7 +153,7 @@ BINARY_COLS = [
     'MA20_above_MA60',
     'Strong_Trend', 
     # 환율↓+MACD↑, 거래량+MACD 콤보, 복합 매수 시그널
-    'USD_down_MACD_up',
+    'USD_down_MACD_up', 
     'MACD_cross_up',
     'MACD_cross_down',
     'MACD_bullish_cross',
@@ -330,7 +333,7 @@ def prepare_sequences(features, close_prices):
     max_i = len(features) - SEQ_LEN 
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 1] # 1일전
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
         future_price = close_prices[i + SEQ_LEN] # 오늘
         if future_price >= base_price * (1 + UP_TARGET_PERCENT):
             label = 0  # 상승
@@ -348,30 +351,20 @@ class StockModel(nn.Module):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.seq_len = SEQ_LEN
 
         self.global_dropout = nn.Dropout(p=dropout)
         self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
-
-        # attention layers
-        self.attn_linear = nn.Linear(hidden_size, hidden_size)
-        self.attn_vector = nn.Linear(hidden_size, 1, bias=False)
         self.layernorm = nn.LayerNorm(hidden_size)
-
         self.fc1 = nn.Linear(hidden_size, 32)
         self.gelu = nn.GELU()
         self.fc2 = nn.Linear(32, 2)
 
     def forward(self, x):
         # x: (batch, seq_len, feature_dim)
-        gru_out, _ = self.gru(x)  # (batch, seq_len, hidden)
-        
-        attn_scores = torch.tanh(self.attn_linear(gru_out))      
-        attn_scores = self.attn_vector(attn_scores).squeeze(-1)  
-        attn_weights = torch.softmax(attn_scores, dim=1).unsqueeze(-1)  
-        context = torch.sum(gru_out * attn_weights, dim=1)       
+        gru_out, _ = self.gru(x)         # gru_out: (batch, seq_len, hidden_size)
+        out = gru_out[:, -1, :]  # 마지막 시점의 output 선택 (batch, hidden_size)
 
-        out = self.layernorm(context)
+        out = self.layernorm(out)
         out = self.fc1(out)
         out = self.gelu(out)
         out = self.global_dropout(out)
@@ -489,14 +482,6 @@ def process_code_for_date(args):
     result = {'model': model, 'scalers': scalers, 'last_pred_prob': prob}
 
     subset = df[df['Date'] < date] # date 하루 전까지 데이터
-    if len(subset) >= 3:
-        # 2일 전 → 1일 전 변화율, 3일 전 → 2일 전 변화율 
-        prev1 = subset.iloc[-1]['Close']
-        prev2 = subset.iloc[-2]['Close']
-        prev3 = subset.iloc[-3]['Close']
-        pct_change = prev1 / prev2 - 1
-        pct_change_2 = prev2 / prev3 - 1
-        result.update({'pct_change': pct_change, 'pct_change_2': pct_change_2})
 
     # 정답 라벨 
     if date in df['Date'].values:
@@ -512,18 +497,11 @@ def process_code_for_date(args):
         if true_label is not None:
             pred_class = None # 확신 없는 예측은 무시
             # 예측 threshold로 판단
-            if prob[0] > UP_PROB_THRESHOLD:
+            if UP_END > prob[0] >= UP_PROB_THRESHOLD:
                 pred_class = 0
-            elif prob[1] > DOWN_PROB_THRESHOLD:
+            elif DOWN_END > prob[1] >= DOWN_PROB_THRESHOLD:
                 pred_class = 1
             result.update({'true_label': true_label, 'pred_class': pred_class})
-
-    # 매수 후보 판단 (실전 기준)
-    if prob[0] > UP_PROB_THRESHOLD:
-        result['buy_candidate'] = {
-            'price': window['Close'].iloc[-1],
-            'pct_change': result['pct_change']
-        }
 
     return code, result
 
@@ -536,17 +514,18 @@ def _process_chunk(codes_chunk, stock_models, date):
             chunk_results[res_code] = res
     return chunk_results
 
-# ------------------- 백테스트 -------------------
-def run_backtest(preproc_dfs, test_dates):
+# ------------------- 테스트 -------------------
+def run_test(preproc_dfs, test_dates):
     # 각 종목 상태 저장
-    stock_models = {code: {'df': df, 'model': None, 'scalers': None,
-                            'shares': 0, 'buy_price': None,
-                            'true': [], 'pred': [], 'trade_history': []}
-                    for code, df in preproc_dfs.items()}
-    total_cash = INITIAL_CAPITAL
-    portfolio_values = []
+    stock_models = {code: {
+        'df': df,
+        'true': [],
+        'pred': [],
+        'pred_dates': [],
+        'probs': []
+    } for code, df in preproc_dfs.items()}
 
-    for idx, date in enumerate(tqdm(test_dates, desc='백테스트')):
+    for date in tqdm(test_dates, desc='테스트'):
         # 종목 리스트를 CHUNK 단위로 나눔
         codes = list(stock_models.keys())
         chunks = [codes[i:i+CHUNK] for i in range(0, len(codes), CHUNK)]
@@ -560,259 +539,99 @@ def run_backtest(preproc_dfs, test_dates):
         )(delayed(_process_chunk)(chunk, stock_models, date) for chunk in chunks)
 
         # 결과 병합
-        buy_candidates = {}
         for res_dict in results_list:
             for code, res in res_dict.items():
                 # 복사
                 data = stock_models[code]
-                # 모델 & 스케일러
-                data['model'] = res['model']
-                data['scalers'] = res['scalers']
-                data['last_pred_prob'] = res['last_pred_prob']
                 # 정답 & 예측
                 if 'true_label' in res:
                     data['true'].append(res['true_label'])
-                    data['pred'].append(res['pred_class'])
-                    if 'pred_dates' not in data:
-                        data['pred_dates'] = []
-                    data['pred_dates'].append(date)
-                    if 'probs' not in data:
-                        data['probs'] = []
-                    data['probs'].append(res['last_pred_prob'])                   
-                # buy 후보
-                if 'buy_candidate' in res:
-                    buy_candidates[code] = res['buy_candidate']
+                    data['pred'].append(res.get('pred_class')) 
+                    prob = res['last_pred_prob']
+                    data['probs'].append(prob)  # 확률 쌍(리스트)을 통째로 저장    
 
-        # 1) 매도 시뮬레이션
-        day_max = total_cash * 0.1
-        per_max = day_max * 0.2
+    return stock_models
 
-        for code, data in stock_models.items():
-            shares = data.get('shares', 0)
-            if shares <= 0 or data.get('buy_price') is None:
-                continue
-            # 매도 판단을 하는 오늘 날짜 전까지의 데이터를 df_hist에 저장(매도 판단)
-            df_hist = data['df'][data['df']['Date'] < date]
-            if df_hist.empty:
-                continue
-            last_price = df_hist['Close'].iloc[-1]
-            buy_price = data['buy_price']
-            pred_prob = data.get('last_pred_prob')
-            # 초기화
-            sell_pct = 0; reason = None
-            
-            if last_price > buy_price:
-                sell_pct = 100; reason = '이익'                
-            elif last_price < buy_price:
-                sell_pct = 100; reason = '손해'          
-                  
-            # 실제 매도
-            if sell_pct > 0:
-                # 매도 수량
-                qty = int(shares * sell_pct / 100)
-                if qty > 0:
-                    # 매도 금액
-                    proceeds = qty * last_price * (1 - FEE_RATE - TAX_RATE)
-                    total_cash += proceeds
-                    data['shares'] -= qty
-                    profit_pct = (last_price * (1 - FEE_RATE - TAX_RATE)) / (buy_price * (1 + FEE_RATE)) - 1
-                    # 매도 기록 업데이트
-                    for trade in data['trade_history']:
-                        # 아직 매도하지 않은 거래 찾기
-                        if trade.get('sell_date') is None:
-                            # 매도 수량>=보유 수량: 전량 매도 처리
-                            if qty >= trade['qty']:
-                                trade['sell_date'] = date
-                                trade['sell_price'] = last_price
-                                trade['profit_pct'] = profit_pct
-                                trade['sell_reason'] = reason
-                                break
-                            else: # 매도 수량<보유 수량: 부분 매도 처리
-                                trade['qty'] -= qty
-                                data['trade_history'].append({
-                                    'buy_date': trade['buy_date'],
-                                    'buy_price': trade['buy_price'],
-                                    'qty': qty,
-                                    'sell_date': date,
-                                    'sell_price': last_price,
-                                    'profit_pct': profit_pct,
-                                    'sell_reason': reason
-                                })
-                                break
-        # 2) 매수 시뮬레이션
-        if buy_candidates:
-            # 코드 리스트를 확률 순으로 정렬 (높은 확률부터)
-            sorted_codes = sorted(
-                buy_candidates.keys(),
-                key=lambda c: stock_models[c]['last_pred_prob'][0],
-                reverse=True
-            )
-            # 상위 N개 종목만 뽑아서 dict 생성
-            top_buy = {code: buy_candidates[code] for code in sorted_codes[:TOP_N_FOR_BUY]}
-        else:
-            top_buy = {}
-        for code, info in top_buy.items():
-            # 매수 시점 가격(전날 종가)
-            price = info["price"] 
-            # 매수 수량 
-            qty = int(per_max // (price * (1 + FEE_RATE))) 
-            if qty <= 0:
-                continue
-            # 실제 총 매수 비용 계산 (수수료 포함)
-            cost = qty * price * (1 + FEE_RATE) 
-            if cost > total_cash: # 자금 부족 시 총 자본금 한도 내에서 다시 수량 계산
-                qty = int(total_cash // (price * (1 + FEE_RATE)))
-                cost = qty * price * (1 + FEE_RATE)
-            if qty <= 0:
-                continue
-            total_cash -= cost
-            data = stock_models[code] # 해당 종목 데이터 가져오기
-            # 이미 보유 중이라면 평균 단가 새로 계산
-            if data['shares'] > 0 and data['buy_price'] is not None:
-                prev_s, prev_p = data['shares'], data['buy_price']
-                data['buy_price'] = (prev_p * prev_s + price * qty) / (prev_s + qty)
-            else: # 신규 매수라면 그냥 현재 매수 가격으로 설정
-                data['buy_price'] = price
-            data['shares'] += qty
-            data['trade_history'].append({
-                'buy_date': date,
-                'buy_price': price,
-                'qty': qty,
-                'sell_date': None,
-                'sell_price': None,
-                'profit_pct': None,
-                'sell_reason': None
-            })
-        
-        # 3) 강제 청산 (마지막 날짜)
-        if idx == len(test_dates) - 1:
-            for code, data in stock_models.items():
-                shares = data.get('shares', 0)
-                buy_price = data.get('buy_price')
-                # 보유 중일 경우 청산 시작
-                if shares > 0 and buy_price is not None:
-                    # 마지막 날짜 종가
-                    price = data['df'][data['df']['Date'] <= date]['Close'].iloc[-1]
-                    # 전량 매도 시 수익금, 수익률 계산
-                    proceeds = shares * price * (1 - FEE_RATE - TAX_RATE)
-                    total_cash += proceeds
-                    profit_pct = (price * (1 - FEE_RATE - TAX_RATE)) / (buy_price * (1 + FEE_RATE)) - 1
-                    for trade in data['trade_history']:
-                        if trade.get('sell_date') is None:
-                            trade['sell_date'] = date
-                            trade['sell_price'] = price
-                            trade['profit_pct'] = profit_pct
-                            trade['sell_reason'] = '강제청산'
-                    data['shares'] = 0
-                    data['buy_price'] = None
-                    
-        # 4) 포트폴리오 가치 업데이트
-        current_value = total_cash
-        for code, data in stock_models.items():
-            shares = data.get('shares', 0)
-            if shares > 0:
-                price = data['df'][data['df']['Date'] <= date]['Close'].iloc[-1] # 현재가
-                current_value += shares * price # 평가금액(보유 수량 * 현재가) 누적
-        portfolio_values.append(current_value)
-
-    return stock_models, portfolio_values
-
-# ------------------- 결과 시각화 및 저장 -------------------
-# 백테스트 결과 시각화
-def plot_backtest_results(dates, values):
-    plt.figure(figsize=(14,6))
-    plt.plot(dates, values, label='총 자산')
-    plt.title('백테스트 기간의 총 자산')
-    plt.xlabel('날짜')
-    plt.ylabel('총 자산 (원)')
-    formatter = ticker.FuncFormatter(lambda x, _: f"{int(x):,}")
-    plt.gca().yaxis.set_major_formatter(formatter)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, '총 자산.png'), dpi=300)
-    plt.close()
-
-# 매매 로그 CSV 저장
-def trade_log_csv(stock_models, filename="매매 로그.csv"):
-    records = []
-    for code, data in stock_models.items():
-        for t in data.get('trade_history', []):
-            records.append({
-                'code': code,
-                'buy_date': t.get('buy_date'),
-                'buy_price': t.get('buy_price'),
-                'sell_date': t.get('sell_date'),
-                'sell_price': t.get('sell_price'),
-                'profit_pct': round(t.get('profit_pct', 0) * 100, 2) if t.get('profit_pct') is not None else None,
-                'sell_reason': t.get('sell_reason')
-            })
-    df = pd.DataFrame(records)
-    if not df.empty and 'buy_date' in df.columns:
-        df = df.sort_values(by='buy_date')  # buy_date 기준으로 오름차순 정렬
-    df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False, encoding='utf-8-sig')
-    
-# 백테스트 기간 Confusion Matrix
-def plot_score(stock_models, filename="backtest_matrix.png"):
+# 테스트 기간 Confusion Matrix
+def plot_score(stock_models, filename="confusion_matrix.png"):
     all_true, all_pred = [], []
     for data in stock_models.values():
         true_list = data.get('true', [])
         pred_list = data.get('pred', [])
-        filtered = [(t, p) for t, p in zip(true_list, pred_list) if t is not None and p is not None]
-        for t, p in filtered:
-            all_true.append(t)
-            all_pred.append(p)
+        # None 값도 포함
+        for t, p in zip(true_list, pred_list):
+            if t is not None:
+                all_true.append(t)
+                all_pred.append(p if p is not None else "미분류")
 
     if not all_true:
         print("유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
         return
 
-    cm = confusion_matrix(all_true, all_pred, labels=[0, 1])
-    labels = ["상승(0)", "하락(1)"]
-    total = cm.sum()
+    label_names = ["상승(0)", "하락(1)"]
+    pred_names = ["상승(0)", "하락(1)", "미분류"]
 
-    # 확장된 행렬: 3x3 (예측 2 + 합계) x (실제 2 + 합계)
-    cm_extended = np.zeros((3, 3), dtype=int)
-    cm_extended[:2, :2] = cm
-    cm_extended[2, :2] = cm.sum(axis=0)         # 열 합계 (실제 기준)
-    cm_extended[:2, 2] = cm.sum(axis=1)         # 행 합계 (예측 기준)
-    cm_extended[2, 2] = total                   # 전체 합계
+    # 행렬 만들기
+    cm = np.zeros((2, 3), dtype=int)
+    for t, p in zip(all_true, all_pred):
+        true_idx = t
+        pred_idx = 0 if p == 0 else 1 if p == 1 else 2
+        cm[true_idx, pred_idx] += 1
 
-    # 퍼센트 계산
-    cm_percent = cm_extended / total
+    # 합계 추가
+    cm_extended = np.zeros((3, 4), dtype=int)
+    cm_extended[:2, :3] = cm
+    cm_extended[2, :3] = cm.sum(axis=0)    # 예측 클래스별 합계
+    cm_extended[:2, 3] = cm.sum(axis=1)    # 실제 클래스별 합계
+    cm_extended[2, 3] = cm.sum()           # 전체 합계
 
-    fig, ax = plt.subplots(figsize=(7, 6))
+    cm_percent = cm_extended / cm.sum() if cm.sum() > 0 else cm_extended
+
+    fig, ax = plt.subplots(figsize=(8, 6))
     cmap = plt.cm.Blues
 
+    # 1. 예측 0/1 칸 합계
+    pred_01_sum = cm[:, :2].sum()
+    # 셀 그리기
     for i in range(3):
-        for j in range(3):
+        for j in range(4):
             value = cm_extended[i, j]
-            if i < 2 and j < 2:  # Confusion matrix 부분
-                percent = cm_percent[i, j] * 100
-                color = cmap(cm_percent[i, j])
+            # 색상은 only 예측:0,1에만
+            # 2. 셀 그리기 루프 내에서 퍼센트와 색상 계산
+            if i < 2 and j < 2:
+                percent = (cm[i, j] / pred_01_sum * 100) if pred_01_sum > 0 else 0.0
+                scaled = 0.2 + 0.8 * (cm[i, j] / pred_01_sum) if pred_01_sum > 0 else 0.2
+                color = cmap(scaled)
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, color=color))
-                ax.text(j + 0.5, i + 0.5, f"{value} ({percent:.1f}%)", 
-                        va='center', ha='center', fontsize=11, color='black')
-            else:  # 합계 영역
+                ax.text(j + 0.5, i + 0.5, f"{value}\n({percent:.1f}%)",
+                        va='center', ha='center', fontsize=12, color='black')
+            elif i < 2 and j == 2:  # 미분류 칸 (예측 None)
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, facecolor="white", linewidth=2, edgecolor="black"))
+                ax.text(j + 0.5, i + 0.5, f"{value}",
+                        va='center', ha='center', fontsize=12, color='black')
+            else:
+                # 합계 행/열
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black'))
-                ax.text(j + 0.5, i + 0.5, f"{value}", 
-                        va='center', ha='center', fontsize=11, fontweight='bold')
+                ax.text(j + 0.5, i + 0.5, f"{value}",
+                        va='center', ha='center', fontsize=12, fontweight='bold')
 
-    # 축 설정
-    ax.set_xticks([0.5, 1.5, 2.5])
+    # 축 라벨
+    ax.set_xticks([0.5, 1.5, 2.5, 3.5])
     ax.set_yticks([0.5, 1.5, 2.5])
-    ax.set_xticklabels(labels + ['합계'], fontsize=11)
-    ax.set_yticklabels(labels + ['합계'], fontsize=11)
-    ax.set_xlim(0, 3)
+    ax.set_xticklabels(pred_names + ['합계'], fontsize=13)
+    ax.set_yticklabels(label_names + ['합계'], fontsize=13)
+    ax.set_xlabel('예측 라벨', fontsize=14)
+    ax.set_ylabel('실제 라벨', fontsize=14)
+
+    ax.set_xlim(0, 4)
     ax.set_ylim(0, 3)
     ax.invert_yaxis()
-    ax.set_title('백테스트 기간 Confusion Matrix', fontsize=14)
-    ax.set_xlabel('실제 라벨', fontsize=12)
-    ax.set_ylabel('예측 라벨', fontsize=12)
+    ax.set_title('Confusion Matrix', fontsize=16)
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
-
+    print(f"Confusion matrix 저장 완료: {os.path.join(OUTPUT_DIR, filename)}")
+    
 # 오늘 매수후보 리스트 생성
 def predict_today_candidates(engine=None):
     today_date = pd.Timestamp.today().normalize()
@@ -850,7 +669,7 @@ def predict_today_candidates(engine=None):
             with torch.no_grad():
                 prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-            if prob[0] >= UP_PROB_THRESHOLD:
+            if UP_END > prob[0] > UP_PROB_THRESHOLD:
                 buy_candidates.append({
                     'code': code,
                     'prob_up': prob[0],
@@ -862,8 +681,8 @@ def predict_today_candidates(engine=None):
             print(f"[{code}] 예측 실패: {e}")
             continue
 
-    top_candidates = sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
-    return top_candidates[:TOP_N_FOR_BUY]
+    # 모든 후보를 확률 기준으로 정렬만 하고 전부 반환
+    return sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
         
 # ------------------- 메인 -------------------
 def main():
@@ -887,14 +706,12 @@ def main():
     test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
 
     # 5) 백테스트 실행
-    stock_models, portfolio_values = run_backtest(preproc_dfs, test_dates)
+    stock_models = run_test(preproc_dfs, test_dates)
 
     # 6) 결과 저장
-    plot_backtest_results(test_dates, portfolio_values)
     plot_score(stock_models)
-    trade_log_csv(stock_models)
     
-    print("백테스트 및 후처리 완료")
+    print("테스트 및 후처리 완료")
 
 if __name__ == '__main__':
     main()
