@@ -27,10 +27,7 @@ EPOCHS = 20
 BATCH_SIZE = 32
 UP_PROB_THRESHOLD = 0.65
 DOWN_PROB_THRESHOLD = 0.65
-UP_END = 1.1
-DOWN_END = 1.1
 BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
-STOCK_NUMBER = 200
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
@@ -497,9 +494,9 @@ def process_code_for_date(args):
         if true_label is not None:
             pred_class = None # 확신 없는 예측은 무시
             # 예측 threshold로 판단
-            if UP_END > prob[0] >= UP_PROB_THRESHOLD:
+            if prob[0] >= UP_PROB_THRESHOLD:
                 pred_class = 0
-            elif DOWN_END > prob[1] >= DOWN_PROB_THRESHOLD:
+            elif prob[1] >= DOWN_PROB_THRESHOLD:
                 pred_class = 1
             result.update({'true_label': true_label, 'pred_class': pred_class})
 
@@ -669,11 +666,10 @@ def predict_today_candidates(engine=None):
             with torch.no_grad():
                 prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-            if UP_END > prob[0] > UP_PROB_THRESHOLD:
+            if prob[0] >= UP_PROB_THRESHOLD:
                 buy_candidates.append({
                     'code': code,
                     'prob_up': prob[0],
-                    'prob_down': prob[1],
                     'price': window['Close'].iloc[-1]
                 })
 
@@ -690,7 +686,7 @@ def main():
     eng = get_engine()
     
     # 2) 종목 리스트 로딩
-    codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {STOCK_NUMBER}", eng)['Code'].tolist()
+    codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {200}", eng)['Code'].tolist()
     
     # 3) 전체 종목 데이터 로딩 및 전처리 
     market_idx_df = load_market_index(eng)
