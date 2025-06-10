@@ -17,21 +17,18 @@ import hashlib, struct
 from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
+BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
+TEST_PERIOD_DAYS = 250
+PROB_THRESHOLD = 0.65
 SEQ_LEN = 5
 TRAIN_YEARS = 12
-TEST_PERIOD_DAYS = 250
-UP_TARGET_PERCENT = 0.02
-DOWN_TARGET_PERCENT = 0.02
+TARGET_PERCENT = 0.02
 LEARNING_RATE = 0.0005
 EPOCHS = 20
 BATCH_SIZE = 32
-UP_PROB_THRESHOLD = 0.65
-DOWN_PROB_THRESHOLD = 0.65
-BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
-CHUNK = 20  # 워커당 묶을 종목 수
 
 # 폰트 설정
 font_path = "C:/Windows/Fonts/malgun.ttf"
@@ -332,9 +329,9 @@ def prepare_sequences(features, close_prices):
         window = features[i: i + SEQ_LEN]
         base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
         future_price = close_prices[i + SEQ_LEN] # 오늘
-        if future_price >= base_price * (1 + UP_TARGET_PERCENT):
+        if future_price >= base_price * (1 + TARGET_PERCENT):
             label = 0  # 상승
-        elif future_price <= base_price * (1 - DOWN_TARGET_PERCENT):
+        elif future_price <= base_price * (1 - TARGET_PERCENT):
             label = 1  # 하락
         else:
             continue
@@ -480,7 +477,7 @@ def process_code_for_date(args):
 
     subset = df[df['Date'] < date] # date 하루 전까지 데이터
 
-    # 정답 라벨 
+    # 4) 예측 결과 처리
     if date in df['Date'].values:
         future_price = df.loc[df['Date'] == date, 'Close'].iloc[0]
         base_price = subset.iloc[-1]['Close'] # 1일 전 종가
@@ -494,22 +491,13 @@ def process_code_for_date(args):
         if true_label is not None:
             pred_class = None # 확신 없는 예측은 무시
             # 예측 threshold로 판단
-            if prob[0] >= UP_PROB_THRESHOLD:
+            if prob[0] >= PROB_THRESHOLD:
                 pred_class = 0
-            elif prob[1] >= DOWN_PROB_THRESHOLD:
+            elif prob[1] >= PROB_THRESHOLD:
                 pred_class = 1
             result.update({'true_label': true_label, 'pred_class': pred_class})
 
     return code, result
-
-# ------------------- 청크 처리 -------------------
-def _process_chunk(codes_chunk, stock_models, date):
-    chunk_results = {}
-    for code in codes_chunk:
-        res_code, res = process_code_for_date((code, stock_models[code], date))
-        if res: # 결과가 있으면 chunk_results에 저장
-            chunk_results[res_code] = res
-    return chunk_results
 
 # ------------------- 테스트 -------------------
 def run_test(preproc_dfs, test_dates):
@@ -517,35 +505,28 @@ def run_test(preproc_dfs, test_dates):
     stock_models = {code: {
         'df': df,
         'true': [],
-        'pred': [],
-        'pred_dates': [],
-        'probs': []
+        'pred': []
     } for code, df in preproc_dfs.items()}
 
     for date in tqdm(test_dates, desc='테스트'):
-        # 종목 리스트를 CHUNK 단위로 나눔
         codes = list(stock_models.keys())
-        chunks = [codes[i:i+CHUNK] for i in range(0, len(codes), CHUNK)]
+        # 종목별로 바로 병렬 실행
+        parallel_input = [(code, stock_models[code], date) for code in codes]
+        results = Parallel(
+            n_jobs=N_CORE,
+            backend='loky',
+            prefer='processes'
+        )(
+            delayed(process_code_for_date)(args) for args in parallel_input
+        )
 
-        # 각 청크에 대해 joblib으로 병렬 실행
-        results_list = Parallel(
-            n_jobs=N_CORE,      # 사용할 프로세스 개수
-            backend='loky',     # 프로세스 기반 병렬 처리
-            prefer='processes', # 프로세스를 선호
-            batch_size=1        # 각 프로세스가 청크 하나씩만 처리
-        )(delayed(_process_chunk)(chunk, stock_models, date) for chunk in chunks)
-
-        # 결과 병합
-        for res_dict in results_list:
-            for code, res in res_dict.items():
-                # 복사
-                data = stock_models[code]
-                # 정답 & 예측
-                if 'true_label' in res:
-                    data['true'].append(res['true_label'])
-                    data['pred'].append(res.get('pred_class')) 
-                    prob = res['last_pred_prob']
-                    data['probs'].append(prob)  # 확률 쌍(리스트)을 통째로 저장    
+        for code, res in results:
+            if not res:
+                continue
+            data = stock_models[code]
+            if 'true_label' in res:
+                data['true'].append(res['true_label'])
+                data['pred'].append(res.get('pred_class'))
 
     return stock_models
 
@@ -581,8 +562,6 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     cm_extended[2, :3] = cm.sum(axis=0)    # 예측 클래스별 합계
     cm_extended[:2, 3] = cm.sum(axis=1)    # 실제 클래스별 합계
     cm_extended[2, 3] = cm.sum()           # 전체 합계
-
-    cm_percent = cm_extended / cm.sum() if cm.sum() > 0 else cm_extended
 
     fig, ax = plt.subplots(figsize=(8, 6))
     cmap = plt.cm.Blues
@@ -666,7 +645,7 @@ def predict_today_candidates(engine=None):
             with torch.no_grad():
                 prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-            if prob[0] >= UP_PROB_THRESHOLD:
+            if prob[0] >= PROB_THRESHOLD:
                 buy_candidates.append({
                     'code': code,
                     'prob_up': prob[0],
@@ -707,7 +686,7 @@ def main():
     # 6) 결과 저장
     plot_score(stock_models)
     
-    print("테스트 및 후처리 완료")
+    print("테스트 완료")
 
 if __name__ == '__main__':
     main()
