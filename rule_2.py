@@ -17,15 +17,16 @@ import hashlib, struct
 from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
-BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
-TEST_PERIOD_DAYS = 250
-PROB_THRESHOLD = 0.65
-SEQ_LEN = 5
 TRAIN_YEARS = 12
 TARGET_PERCENT = 0.02
+BACKTEST_START_DATE = pd.to_datetime("2024-06-27")
+TEST_PERIOD_DAYS = 300
+SEQ_LEN = 5
+BATCH_SIZE = 32
 LEARNING_RATE = 0.0005
 EPOCHS = 20
-BATCH_SIZE = 32
+VAL_LOSS_THRESHOLD = 0.68
+PROB_THRESHOLD = 0.65
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
@@ -350,17 +351,21 @@ class StockModel(nn.Module):
         self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
         self.layernorm = nn.LayerNorm(hidden_size)
         self.fc1 = nn.Linear(hidden_size, 32)
-        self.gelu = nn.GELU()
-        self.fc2 = nn.Linear(32, 2)
+        self.gelu1 = nn.GELU()
+        self.fc_middle = nn.Linear(32, 16)  
+        self.gelu2 = nn.GELU()
+        self.fc2 = nn.Linear(16, 2)        
 
     def forward(self, x):
         # x: (batch, seq_len, feature_dim)
         gru_out, _ = self.gru(x)         # gru_out: (batch, seq_len, hidden_size)
-        out = gru_out[:, -1, :]  # 마지막 시점의 output 선택 (batch, hidden_size)
+        out = gru_out[:, -1, :]          # 마지막 시점의 output 선택 (batch, hidden_size)
 
         out = self.layernorm(out)
         out = self.fc1(out)
-        out = self.gelu(out)
+        out = self.gelu1(out)
+        out = self.fc_middle(out)        
+        out = self.gelu2(out)
         out = self.global_dropout(out)
         out = self.fc2(out)
         return out
@@ -447,7 +452,7 @@ def train_model(df_train, early_stopping_patience=3, code=None):
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model, scalers
+    return model, scalers, best_val_loss 
 
 # ------------------- 학습, 예측, 평가, 매수 후보 -------------------
 def process_code_for_date(args):
@@ -460,8 +465,8 @@ def process_code_for_date(args):
     df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
     # 2) 모델 학습
-    model, scalers = train_model(df_train, code=code)
-    if model is None:
+    model, scalers, best_val = train_model(df_train, code=code)
+    if model is None or best_val is None or best_val >= VAL_LOSS_THRESHOLD:
         return code, {}
 
     # 3) 최신 시퀀스로 예측
@@ -477,7 +482,7 @@ def process_code_for_date(args):
 
     subset = df[df['Date'] < date] # date 하루 전까지 데이터
 
-    # 4) 예측 결과 처리
+    # 정답 라벨 
     if date in df['Date'].values:
         future_price = df.loc[df['Date'] == date, 'Close'].iloc[0]
         base_price = subset.iloc[-1]['Close'] # 1일 전 종가
@@ -505,7 +510,9 @@ def run_test(preproc_dfs, test_dates):
     stock_models = {code: {
         'df': df,
         'true': [],
-        'pred': []
+        'pred': [],
+        'pred_dates': [],
+        'probs': []
     } for code, df in preproc_dfs.items()}
 
     for date in tqdm(test_dates, desc='테스트'):
@@ -526,7 +533,9 @@ def run_test(preproc_dfs, test_dates):
             data = stock_models[code]
             if 'true_label' in res:
                 data['true'].append(res['true_label'])
-                data['pred'].append(res.get('pred_class'))
+                data['pred'].append(res.get('pred_class')) 
+                prob = res['last_pred_prob']
+                data['probs'].append(prob)
 
     return stock_models
 
@@ -536,54 +545,44 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     for data in stock_models.values():
         true_list = data.get('true', [])
         pred_list = data.get('pred', [])
-        # None 값도 포함
         for t, p in zip(true_list, pred_list):
-            if t is not None:
+            # t, p 모두 0 또는 1만 허용 
+            if t is not None and p in [0, 1]:
                 all_true.append(t)
-                all_pred.append(p if p is not None else "미분류")
+                all_pred.append(p)
 
     if not all_true:
         print("유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
         return
 
     label_names = ["상승(0)", "하락(1)"]
-    pred_names = ["상승(0)", "하락(1)", "미분류"]
+    pred_names = ["상승(0)", "하락(1)"]
 
-    # 행렬 만들기
-    cm = np.zeros((2, 3), dtype=int)
+    # 2x2 행렬
+    cm = np.zeros((2, 2), dtype=int)
     for t, p in zip(all_true, all_pred):
-        true_idx = t
-        pred_idx = 0 if p == 0 else 1 if p == 1 else 2
-        cm[true_idx, pred_idx] += 1
+        cm[t, p] += 1
 
-    # 합계 추가
-    cm_extended = np.zeros((3, 4), dtype=int)
-    cm_extended[:2, :3] = cm
-    cm_extended[2, :3] = cm.sum(axis=0)    # 예측 클래스별 합계
-    cm_extended[:2, 3] = cm.sum(axis=1)    # 실제 클래스별 합계
-    cm_extended[2, 3] = cm.sum()           # 전체 합계
+    # 합계 추가된 3x3 확장 행렬
+    cm_extended = np.zeros((3, 3), dtype=int)
+    cm_extended[:2, :2] = cm
+    cm_extended[2, :2] = cm.sum(axis=0)    # 예측 클래스별 합계
+    cm_extended[:2, 2] = cm.sum(axis=1)    # 실제 클래스별 합계
+    cm_extended[2, 2] = cm.sum()           # 전체 합계
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
     cmap = plt.cm.Blues
 
-    # 1. 예측 0/1 칸 합계
-    pred_01_sum = cm[:, :2].sum()
     # 셀 그리기
     for i in range(3):
-        for j in range(4):
+        for j in range(3):
             value = cm_extended[i, j]
-            # 색상은 only 예측:0,1에만
-            # 2. 셀 그리기 루프 내에서 퍼센트와 색상 계산
             if i < 2 and j < 2:
-                percent = (cm[i, j] / pred_01_sum * 100) if pred_01_sum > 0 else 0.0
-                scaled = 0.2 + 0.8 * (cm[i, j] / pred_01_sum) if pred_01_sum > 0 else 0.2
+                percent = (cm[i, j] / cm.sum() * 100) if cm.sum() > 0 else 0.0
+                scaled = 0.2 + 0.8 * (cm[i, j] / cm.sum()) if cm.sum() > 0 else 0.2
                 color = cmap(scaled)
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, color=color))
                 ax.text(j + 0.5, i + 0.5, f"{value}\n({percent:.1f}%)",
-                        va='center', ha='center', fontsize=12, color='black')
-            elif i < 2 and j == 2:  # 미분류 칸 (예측 None)
-                ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=True, facecolor="white", linewidth=2, edgecolor="black"))
-                ax.text(j + 0.5, i + 0.5, f"{value}",
                         va='center', ha='center', fontsize=12, color='black')
             else:
                 # 합계 행/열
@@ -592,14 +591,14 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
                         va='center', ha='center', fontsize=12, fontweight='bold')
 
     # 축 라벨
-    ax.set_xticks([0.5, 1.5, 2.5, 3.5])
+    ax.set_xticks([0.5, 1.5, 2.5])
     ax.set_yticks([0.5, 1.5, 2.5])
     ax.set_xticklabels(pred_names + ['합계'], fontsize=13)
     ax.set_yticklabels(label_names + ['합계'], fontsize=13)
     ax.set_xlabel('예측 라벨', fontsize=14)
     ax.set_ylabel('실제 라벨', fontsize=14)
 
-    ax.set_xlim(0, 4)
+    ax.set_xlim(0, 3)
     ax.set_ylim(0, 3)
     ax.invert_yaxis()
     ax.set_title('Confusion Matrix', fontsize=16)
@@ -630,8 +629,8 @@ def predict_today_candidates(engine=None):
             train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
             df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
-            model, scalers = train_model(df_train, code=code)
-            if model is None:
+            model, scalers, best_val = train_model(df_train, code=code)
+            if model is None or best_val is None or best_val >= VAL_LOSS_THRESHOLD:
                 continue
 
             window = df[df['Date'] < today_date].tail(SEQ_LEN)
@@ -686,7 +685,7 @@ def main():
     # 6) 결과 저장
     plot_score(stock_models)
     
-    print("테스트 완료")
+    print("테스트 및 후처리 완료")
 
 if __name__ == '__main__':
     main()
