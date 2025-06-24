@@ -371,14 +371,14 @@ class StockModel(nn.Module):
         return out
     
 # ------------------- 학습 함수 -------------------
-def train_model(df_train, early_stopping_patience=3, code=None):
+def train_model(df_train, code=None):
     
     # 종목별 시드 설정 (같은 종목이면 항상 같은 시드)
     seed = code_to_seed(code)
     torch.manual_seed(seed)
     np.random.seed(seed)
     
-    # --- 1. 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
+    # 1) 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
     split_idx = int(len(df_train) * 0.7)
     df_train_feat = df_train.iloc[:split_idx]  # scaler 학습에 사용할 데이터
 
@@ -396,7 +396,7 @@ def train_model(df_train, early_stopping_patience=3, code=None):
     if len(y) < 100:
         return None, scalers
 
-    # --- 2. train/val split (앞 70%: 학습, 뒤 30%: 검증) ---
+    # 2) train/val split (앞 70%: 학습, 뒤 30%: 검증) ---
     split_idx = int(len(y) * 0.7)
     X_train, X_val = X_seq[:split_idx], X_seq[split_idx:]
     y_train, y_val = y[:split_idx], y[split_idx:]
@@ -410,16 +410,17 @@ def train_model(df_train, early_stopping_patience=3, code=None):
     
     model = StockModel(input_size=X_seq.shape[2]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    weight_tensor = torch.tensor([1.0, 1.0]).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    criterion = nn.CrossEntropyLoss()
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
+    # 3) 학습 루프
     best_val_loss = float('inf')
     best_state = None
     epochs_no_improve = 0
-
+    early_stopping_patience = 3
+    
     for epoch in range(EPOCHS):
-        # --- train ---
+        # train
         model.train()
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
@@ -428,7 +429,7 @@ def train_model(df_train, early_stopping_patience=3, code=None):
             loss.backward()
             optimizer.step()
 
-        # --- validation ---
+        # validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -472,17 +473,16 @@ def process_code_for_date(args):
     # 3) 최신 시퀀스로 예측
     window = df[df['Date'] < date].tail(SEQ_LEN) # 입력용 데이터 뽑기
     inp = scale_features(window, scalers) # 정규화(SEQ_LEN, feature_dim)
-    inp = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device) # PyTorch 텐서로 변환, 배치 차원 추가 (1, SEQ_LEN, feature_dim)
+    inp_tensor = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device) # PyTorch 텐서로 변환, 배치 차원 추가 (1, SEQ_LEN, feature_dim)
     # 예측([prob_up, prob_down])
     model.eval()
     with torch.no_grad():
-        prob = torch.softmax(model(inp), dim=1).cpu().numpy()[0]
-
-    result = {'model': model, 'scalers': scalers, 'last_pred_prob': prob}
+        prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
     subset = df[df['Date'] < date] # date 하루 전까지 데이터
 
-    # 정답 라벨 
+    # 4) 예측 결과 처리 
+    result = {}
     if date in df['Date'].values:
         future_price = df.loc[df['Date'] == date, 'Close'].iloc[0]
         base_price = subset.iloc[-1]['Close'] # 1일 전 종가
@@ -500,7 +500,7 @@ def process_code_for_date(args):
                 pred_class = 0
             elif prob[1] >= PROB_THRESHOLD:
                 pred_class = 1
-            result.update({'true_label': true_label, 'pred_class': pred_class})
+            result = {'true_label': true_label, 'pred_class': pred_class}
 
     return code, result
 
@@ -510,9 +510,7 @@ def run_test(preproc_dfs, test_dates):
     stock_models = {code: {
         'df': df,
         'true': [],
-        'pred': [],
-        'pred_dates': [],
-        'probs': []
+        'pred': []
     } for code, df in preproc_dfs.items()}
 
     for date in tqdm(test_dates, desc='테스트'):
@@ -533,9 +531,7 @@ def run_test(preproc_dfs, test_dates):
             data = stock_models[code]
             if 'true_label' in res:
                 data['true'].append(res['true_label'])
-                data['pred'].append(res.get('pred_class')) 
-                prob = res['last_pred_prob']
-                data['probs'].append(prob)
+                data['pred'].append(res.get('pred_class'))
 
     return stock_models
 
