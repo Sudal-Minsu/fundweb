@@ -10,8 +10,6 @@ import sys
 from datetime import datetime
 from sklearn.neural_network import MLPRegressor
 from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
-from rule_2 import predict_today_candidates  # GRU 기반 후보 추출 함수
-
 
 # ───────────── 설정 ─────────────
 BUY_QUANTITY = 10  # 매수 수량 설정
@@ -28,6 +26,15 @@ if not access_token:
 print(f"🔑 액세스 토큰: {access_token}\n")
 
 # ───────────── API 함수 ─────────────
+def fetch_stock_list_from_db():
+    conn = pymysql.connect(**DB_CONFIG)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT Code FROM top_stock_price")
+    result = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [row[0] for row in result]
+
 def get_hashkey(data):
     url = f"{url_base}/uapi/hashkey"
     headers = {"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret}
@@ -126,41 +133,33 @@ def send_order(stock_code, price, qty, order_type="buy"):
 
 # ───────────── 실행 ─────────────
 if __name__ == "__main__":
-    portfolio = {}
-    from sqlalchemy import create_engine
-    engine = create_engine(
-        f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
-    )
-
+    portfolio = {}  # {code: {'buy_price': int, 'qty': int}}
+    stock_list = fetch_stock_list_from_db()
     try:
         while True:
-            print("📊 GRU 기반 매수 후보 추출 중...")
-            top_candidates = predict_today_candidates(engine)
+            stock_code = random.choice(stock_list)
+            price = get_current_price(stock_code)
+            if not price:
+                print(f"❌ 현재가 조회 실패: {stock_code}")
+                time.sleep(5)
+                continue
 
-            for candidate in top_candidates:
-                stock_code = candidate['code']
-                price = get_current_price(stock_code)
-                if not price:
-                    print(f"❌ 현재가 조회 실패: {stock_code}")
-                    time.sleep(5)
-                    continue
+            expected_profit = lsmc_expected_profit(stock_code, price)
+            print(f"[LSMC-MLP] {stock_code} 현재가: {price}, 기대수익: {expected_profit:.2f}")
 
-                expected_profit = lsmc_expected_profit(stock_code, price)
-                print(f"[LSMC-MLP] {stock_code} 현재가: {price}, 기대수익: {expected_profit:.2f}")
-
-                if stock_code not in portfolio:
-                    if expected_profit > 500:
-                        time.sleep(1.2)
-                        result = send_order(stock_code, price, qty=BUY_QUANTITY, order_type="buy")
-                        print(f"✅ 매수 요청: {stock_code}, 결과: {result}")
-                        portfolio[stock_code] = {'buy_price': price, 'qty': BUY_QUANTITY}
-                else:
-                    buy_price = portfolio[stock_code]['buy_price']
-                    if expected_profit < 300 or price < buy_price * 0.98:
-                        time.sleep(1.2)
-                        result = send_order(stock_code, price, qty=portfolio[stock_code]['qty'], order_type="sell")
-                        print(f"✅ 매도 요청: {stock_code}, 결과: {result}")
-                        del portfolio[stock_code]
+            if stock_code not in portfolio:
+                if expected_profit > 500:
+                    time.sleep(1.2)
+                    result = send_order(stock_code, price, qty=BUY_QUANTITY, order_type="buy")
+                    print(f"✅ 매수 요청: {stock_code}, 결과: {result}")
+                    portfolio[stock_code] = {'buy_price': price, 'qty': BUY_QUANTITY}
+            else:
+                buy_price = portfolio[stock_code]['buy_price']
+                if expected_profit < 300 or price < buy_price * 0.98:
+                    time.sleep(1.2)
+                    result = send_order(stock_code, price, qty=portfolio[stock_code]['qty'], order_type="sell")
+                    print(f"✅ 매도 요청: {stock_code}, 결과: {result}")
+                    del portfolio[stock_code]
 
             time.sleep(5)
     except KeyboardInterrupt:

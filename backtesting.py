@@ -10,13 +10,13 @@ import sys
 from datetime import datetime
 from sklearn.neural_network import MLPRegressor
 from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
-from rule_2 import predict_today_candidates  # GRU 기반 후보 추출 함수
-
+import matplotlib.pyplot as plt
 
 # ───────────── 설정 ─────────────
 BUY_QUANTITY = 10  # 매수 수량 설정
 app_key, app_secret = get_api_keys()
 url_base = "https://openapivts.koreainvestment.com:29443"
+START_CAPITAL = 10_000_000
 
 # ───────────── 토큰 발급 ─────────────
 res = requests.post(f"{url_base}/oauth2/tokenP", headers={"content-type": "application/json"},
@@ -28,6 +28,15 @@ if not access_token:
 print(f"🔑 액세스 토큰: {access_token}\n")
 
 # ───────────── API 함수 ─────────────
+def fetch_stock_list_from_db():
+    conn = pymysql.connect(**DB_CONFIG)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT Code FROM top_stock_price")
+    result = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [row[0] for row in result]
+
 def get_hashkey(data):
     url = f"{url_base}/uapi/hashkey"
     headers = {"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret}
@@ -99,69 +108,34 @@ def lsmc_expected_profit(stock_code, current_price):
     model.fit(X, y)
     return model.predict([[current_price]])[0]
 
-def send_order(stock_code, price, qty, order_type="buy"):
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
-    tr_id = "VTTC0802U" if order_type == "buy" else "VTTC0801U"
-    data = {
-        "CANO": ACCOUNT_INFO["CANO"],
-        "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
-        "PDNO": stock_code,
-        "ORD_DVSN": "00",
-        "ORD_QTY": str(qty),
-        "ORD_UNPR": str(price)
-    }
-    hashkey = get_hashkey(data)
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key,
-        "appSecret": app_secret,
-        "tr_id": tr_id,
-        "hashkey": hashkey
-    }
-    time.sleep(1.2)
-    res = requests.post(url, headers=headers, data=json.dumps(data))
-    time.sleep(1.2)
-    return res.json()
+def backtest_single_stock(stock_code):
+    prices = get_historical_prices_api(stock_code)
+    if prices is None or len(prices) < 50:
+        print(f"❌ 데이터 부족: {stock_code}")
+        return
+    capital = START_CAPITAL
+    portfolio_value = []00
+    position = None
+    for i in range(30, len(prices) - 10):
+        today_price = prices[i]
+        expected_profit = lsmc_expected_profit(stock_code, today_price)
+        if position is None and expected_profit > 500:
+            position = {'entry_price': today_price, 'qty': BUY_QUANTITY}
+        elif position and i - 10 >= 0:
+            capital += (today_price - position['entry_price']) * position['qty']
+            position = None
+        portfolio_value.append(capital)
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(portfolio_value)
+    plt.title(f"{stock_code} 백테스트 자산 변화 (MLP 기반)")
+    plt.xlabel("시간")
+    plt.ylabel("자산")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 # ───────────── 실행 ─────────────
 if __name__ == "__main__":
-    portfolio = {}
-    from sqlalchemy import create_engine
-    engine = create_engine(
-        f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
-    )
-
-    try:
-        while True:
-            print("📊 GRU 기반 매수 후보 추출 중...")
-            top_candidates = predict_today_candidates(engine)
-
-            for candidate in top_candidates:
-                stock_code = candidate['code']
-                price = get_current_price(stock_code)
-                if not price:
-                    print(f"❌ 현재가 조회 실패: {stock_code}")
-                    time.sleep(5)
-                    continue
-
-                expected_profit = lsmc_expected_profit(stock_code, price)
-                print(f"[LSMC-MLP] {stock_code} 현재가: {price}, 기대수익: {expected_profit:.2f}")
-
-                if stock_code not in portfolio:
-                    if expected_profit > 500:
-                        time.sleep(1.2)
-                        result = send_order(stock_code, price, qty=BUY_QUANTITY, order_type="buy")
-                        print(f"✅ 매수 요청: {stock_code}, 결과: {result}")
-                        portfolio[stock_code] = {'buy_price': price, 'qty': BUY_QUANTITY}
-                else:
-                    buy_price = portfolio[stock_code]['buy_price']
-                    if expected_profit < 300 or price < buy_price * 0.98:
-                        time.sleep(1.2)
-                        result = send_order(stock_code, price, qty=portfolio[stock_code]['qty'], order_type="sell")
-                        print(f"✅ 매도 요청: {stock_code}, 결과: {result}")
-                        del portfolio[stock_code]
-
-            time.sleep(5)
-    except KeyboardInterrupt:
-        print("⏹ 자동 매매 종료")
+    stock_code = input("▶ 백테스트할 종목 코드를 입력하세요 (예: 005930): ").strip()
+    backtest_single_stock(stock_code)
