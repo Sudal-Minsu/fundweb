@@ -9,28 +9,50 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from rule_3 import auto_trading_loop
 import threading
 from functions import read_trades_mysql
+from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
 
+# DB 설정 (SQLite로 간단하게 시작)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///portfolio.db'
+db = SQLAlchemy(app)
+
+# DB 모델 정의
+class Portfolio(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ticker = db.Column(db.String(20))
+    weight = db.Column(db.Float)
+
+with app.app_context():
+    db.create_all()
+
 trading_thread = None
 
+# @app.route('/ping')
+# def ping():
+#    global trading_thread
 
-def run_trading_loop():
-    auto_trading_loop("005930", interval_sec=60)
+#    if trading_thread is None or not trading_thread.is_alive():
+#        print("🔁 트레이딩 스레드 시작")
+#        trading_thread = threading.Thread(
+#            target=auto_trading_loop,
+#            args=("005930",),
+#            kwargs={"interval_sec": 60}
+#        )
+#        trading_thread.daemon = True
+#        trading_thread.start()
 
-@app.route('/ping')
-def ping():
-    global trading_thread
-    if trading_thread is None or not trading_thread.is_alive():
-        trading_thread = threading.Thread(target=run_trading_loop)
-        trading_thread.daemon = True
-        trading_thread.start()
+#    # ✅ 거래 내역 조회
+#    try:
+#        df = read_trades_mysql("trade_history")
+#        trades = df.to_dict(orient="records")
+#    except Exception as e:
+#        print(f"❌ DB 조회 실패: {e}")
+#        trades = []
 
-    # ✅ 거래 로그 읽어오기
-    df = read_trades_mysql("trade_history")
-    trades = df.to_dict(orient='records')
+#    return render_template("ping.html", trades=trades)
 
-    return render_template("ping.html", trades=trades)
+
 
 @app.route('/backtest')
 def backtest():
@@ -74,6 +96,64 @@ def backtest():
 @app.route("/home")
 def home():
     return render_template("home.html")
+
+@app.route("/save-portfolio", methods=["POST"])
+def save_portfolio():
+    Portfolio.query.delete()
+    for i in range(5):
+        ticker = request.form.get(f"ticker{i}")
+        weight = request.form.get(f"weight{i}")
+        if ticker and weight:
+            db.session.add(Portfolio(ticker=ticker, weight=float(weight)))
+    db.session.commit()
+    return redirect("/portfolio")  # 또는 "/home" 등 리디렉션 대상 경로
+
+@app.route("/portfolio-data")
+def portfolio_data():
+    base_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
+
+    # 포트폴리오 비중 데이터
+    pie_path = os.path.join(base_dir, "포트폴리오 비중.csv")
+    if os.path.exists(pie_path):
+        df_pie = pd.read_csv(pie_path)
+    else:
+        df_pie = pd.DataFrame({"ticker": ["삼성전자", "현대차"], "weight": [50, 50]})
+
+    # 누적 수익률
+    perf_path = os.path.join(base_dir, "누적 수익률.csv")
+    if os.path.exists(perf_path):
+        df_perf = pd.read_csv(perf_path)
+        df_perf = df_perf.sort_values(by=df_perf.columns[0])
+        perf_labels = df_perf.iloc[:, 0].tolist()
+        perf_values = df_perf.iloc[:, 1].tolist()
+    else:
+        perf_labels = ["1월", "2월", "3월", "4월", "5월"]
+        perf_values = [0, 5, 10, 12, 15]
+
+    # 월별 수익률
+    heatmap_path = os.path.join(base_dir, "월별 수익률.csv")
+    if os.path.exists(heatmap_path):
+        df_heatmap = pd.read_csv(heatmap_path)
+        heatmap_labels = df_heatmap.iloc[:, 0].tolist()
+        heatmap_values = df_heatmap.iloc[:, 1].tolist()
+    else:
+        heatmap_labels = ["1월", "2월", "3월", "4월", "5월"]
+        heatmap_values = [2, -1, 3, 0, 4]
+
+    return jsonify({
+        "pie": {
+            "labels": df_pie["ticker"].tolist(),
+            "values": df_pie["weight"].tolist()
+        },
+        "performance": {
+            "labels": perf_labels,
+            "values": perf_values
+        },
+        "heatmap": {
+            "labels": heatmap_labels,
+            "values": heatmap_values
+        }
+    })
 
 @app.route('/run-backtest', methods=['POST'])
 def run_backtest():

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Strategy</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+    }
+    .nav-links a {
+      margin-left: 12px;
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    label, select, input, textarea {
+      display: block;
+      width: 100%;
+      margin-top: 10px;
+      margin-bottom: 20px;
+      background-color: #444;
+      color: white;
+      border: 1px solid #999;
+      padding: 8px;
+      border-radius: 4px;
+    }
+    .section {
+      margin-bottom: 40px;
+    }
+    .section h3 {
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Strategy</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/papertrading">Paper Trading</a>
+      <a href="/backtest">Backtest</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <h2 style="text-align: center;">▸ 투자 전략 설정 및 평가</h2>
+
+    <form method="POST" action="/save-strategy">
+
+      <div class="section">
+        <h3>매수/매도 조건 설정</h3>
+        <label for="buy_condition">매수 조건 (예: 예측 상승률 > 3%)</label>
+        <input type="text" name="buy_condition" id="buy_condition" placeholder="예: 예측 수익률 > 2%">
+
+        <label for="sell_condition">매도 조건 (예: 손실 -5% 이하 또는 예측 하락)</label>
+        <input type="text" name="sell_condition" id="sell_condition" placeholder="예: 예측 수익률 < -1% 또는 드로우다운 초과">
+      </div>
+
+      <div class="section">
+        <h3>투자 비중 설정 방식</h3>
+        <select name="allocation_method">
+          <option value="fixed">고정 비중 (예: 종목당 20%)</option>
+          <option value="dynamic">예측 기반 가중치 조정</option>
+          <option value="kelly">Kelly 공식 기반 최적화</option>
+        </select>
+      </div>
+
+      <div class="section">
+        <h3>리스크 관리 옵션</h3>
+        <label for="max_drawdown">최대 낙폭 허용 (%)</label>
+        <input type="number" name="max_drawdown" id="max_drawdown" placeholder="예: 10">
+
+        <label for="stop_loss">손절 기준 (%)</label>
+        <input type="number" name="stop_loss" id="stop_loss" placeholder="예: 5">
+      </div>
+
+      <div style="text-align: center;">
+        <button type="submit" style="padding: 10px 20px; font-size: 16px;">전략 저장</button>
+      </div>
+    <div class="section">
+  <h3>전략 유형 선택</h3>
+  <select name="strategy_type">
+    <option value="ma">단순 이동 평균 기반</option>
+    <option value="predict">예측 상승률 기반</option>
+    <option value="drawdown">드로우다운 회피 전략</option>
+  </select>
+</div>
+</form>
+
+<div class="section">
+  <h3>시뮬레이션 결과</h3>
+  <details>
+    <summary>시뮬레이션 수익률 그래프</summary>
+    <canvas id="strategyReturnChart" style="background-color: #fff; max-width: 100%; height: 300px;"></canvas>
+  </details>
+
+  <details>
+    <summary>트레이드별 손익 요약</summary>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th>종목</th>
+          <th>매수일</th>
+          <th>매도일</th>
+          <th>수익률 (%)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>삼성전자</td>
+          <td>2024-01-10</td>
+          <td>2024-03-20</td>
+          <td>7.5</td>
+        </tr>
+        <tr>
+          <td>LG화학</td>
+          <td>2024-01-15</td>
+          <td>2024-04-05</td>
+          <td>-2.1</td>
+        </tr>
+      </tbody>
+    </table>
+  </details>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const ctx = document.getElementById("strategyReturnChart");
+    if (ctx) {
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ['1월', '2월', '3월', '4월', '5월'],
+          datasets: [{
+            label: '전략 수익률 (%)',
+            data: [0, 3, 5, 8, 10],
+            borderColor: '#4B6A88',
+            backgroundColor: 'transparent',
+            tension: 0.2
+          }]
+        },
+        options: {
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+  });
+</script>
+  </div>
+</body>
+</html>

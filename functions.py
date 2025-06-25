@@ -15,6 +15,8 @@ def get_api_keys():
     """저장된 API 키를 불러오는 함수"""
     app_key = keyring.get_password('mock_app_key', '고민수')
     app_secret = keyring.get_password('mock_app_secret', '고민수')
+    print("✅ app_key:", app_key)
+    print("✅ app_secret:", app_secret)
     return app_key, app_secret
 
 # 🔹 접근토큰 발급
@@ -31,6 +33,7 @@ def get_access_token(app_key, app_secret):
     }
 
     res = requests.post(url, headers=headers, data=json.dumps(body))
+    print("🔐 토큰 응답 전체:", res.json())
     return res.json().get("access_token", "")
 
 # 🔹 토큰 매니저
@@ -168,13 +171,12 @@ def execute_order(stock_code, quantity, order_type, order_style, app_key, app_se
 
 
 def check_account(access_token, app_key, app_secret):
-
     output1 = []
     output2 = []
     CTX_AREA_NK100 = ''
     url_base = "https://openapivts.koreainvestment.com:29443"
-    while True:
 
+    while True:
         path = "/uapi/domestic-stock/v1/trading/inquire-balance"
         url = f"{url_base}/{path}"
 
@@ -199,18 +201,32 @@ def check_account(access_token, app_key, app_secret):
             "CTX_AREA_FK100": '',
             "CTX_AREA_NK100": CTX_AREA_NK100
         }
-        print(url, headers, params)
+
         res = requests.get(url, headers=headers, params=params)
-        print(res.content)
-        output1.append(pd.DataFrame.from_records(res.json()['output1']))
-        
-        CTX_AREA_NK100 = res.json()['ctx_area_nk100'].strip()
+        print("📡 응답 상태코드:", res.status_code)
+
+        try:
+            data = res.json()
+        except Exception:
+            print("❌ JSON 파싱 실패:", res.text[:300])
+            return None, None
+
+        if data.get("rt_cd") != "0" or "output1" not in data:
+            print("❌ API 실패: 토큰이 만료되었거나, 권한 문제가 있습니다.")
+            # 캐시된 토큰 삭제
+            if os.path.exists("access_token.json"):
+                os.remove("access_token.json")
+                print("🗑️ 캐시된 토큰 삭제 완료")
+            return None, None
+
+        output1.append(pd.DataFrame.from_records(data['output1']))
+        CTX_AREA_NK100 = data.get('ctx_area_nk100', '').strip()
 
         if CTX_AREA_NK100 == '':
-            output2.append(res.json()['output2'][0])
+            output2.append(data.get('output2', [{}])[0])
             break
 
-    if not output1[0].empty:
+    if output1 and not output1[0].empty:
         res1 = pd.concat(output1)[['pdno', 'hldg_qty', 'pchs_avg_pric']].rename(columns={
             'pdno': '종목코드',
             'hldg_qty': '보유수량',
@@ -219,9 +235,10 @@ def check_account(access_token, app_key, app_secret):
     else:
         res1 = pd.DataFrame(columns=['종목코드', '보유수량', '매입단가'])
 
-    res2 = output2[0]
-    
+    res2 = output2[0] if output2 else {}
+
     return [res1, res2]
+
 
 
 
