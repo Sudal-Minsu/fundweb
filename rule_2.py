@@ -167,19 +167,6 @@ BINARY_COLS = [
 CONTINUOUS_COLS = STANDARD_COLS + MINMAX_COLS 
 FEATURE_COLUMNS = CONTINUOUS_COLS + BINARY_COLS
 
-# ------------------- 스케일링 -------------------
-def scale_features(df, scalers): 
-    if df.empty:
-        raise ValueError("[scale_features] 입력 데이터프레임이 비어 있습니다.")
-    parts = []
-    if 'minmax' in scalers:
-        parts.append(scalers['minmax'].transform(df[MINMAX_COLS]))
-    if 'standard' in scalers:
-        parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
-    if BINARY_COLS:
-        parts.append(df[BINARY_COLS].values)
-    return np.concatenate(parts, axis=1)
-
 # ------------------- DB & 데이터 로딩 -------------------
 def get_engine():
     return create_engine(
@@ -322,24 +309,6 @@ def engineer_features(df):
     df.sort_values('Date', inplace=True)
     return df
 
-# ------------------- 시퀀스 생성 함수 -------------------
-def prepare_sequences(features, close_prices):
-    sequences, targets = [], []
-    max_i = len(features) - SEQ_LEN 
-    for i in range(max_i):
-        window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
-        future_price = close_prices[i + SEQ_LEN] # 오늘
-        if future_price >= base_price * (1 + TARGET_PERCENT):
-            label = 0  # 상승
-        elif future_price <= base_price * (1 - TARGET_PERCENT):
-            label = 1  # 하락
-        else:
-            continue
-        sequences.append(window)
-        targets.append(label)
-    return np.array(sequences), np.array(targets)
-
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
     def __init__(self, input_size, hidden_size=32, dropout=0.3):
@@ -369,7 +338,38 @@ class StockModel(nn.Module):
         out = self.global_dropout(out)
         out = self.fc2(out)
         return out
-    
+
+# ------------------- 시퀀스 생성 함수 -------------------
+def prepare_sequences(features, close_prices):
+    sequences, targets = [], []
+    max_i = len(features) - SEQ_LEN 
+    for i in range(max_i):
+        window = features[i: i + SEQ_LEN]
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
+        future_price = close_prices[i + SEQ_LEN] # 오늘
+        if future_price >= base_price * (1 + TARGET_PERCENT):
+            label = 0  # 상승
+        elif future_price <= base_price * (1 - TARGET_PERCENT):
+            label = 1  # 하락
+        else:
+            continue
+        sequences.append(window)
+        targets.append(label)
+    return np.array(sequences), np.array(targets)
+
+# ------------------- 스케일링 -------------------
+def scale_features(df, scalers): 
+    if df.empty:
+        raise ValueError("[scale_features] 입력 데이터프레임이 비어 있습니다.")
+    parts = []
+    if 'minmax' in scalers:
+        parts.append(scalers['minmax'].transform(df[MINMAX_COLS]))
+    if 'standard' in scalers:
+        parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
+    if BINARY_COLS:
+        parts.append(df[BINARY_COLS].values)
+    return np.concatenate(parts, axis=1)
+
 # ------------------- 학습 함수 -------------------
 def train_model(df_train, code=None):
     
