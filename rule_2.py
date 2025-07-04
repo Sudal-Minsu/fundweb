@@ -19,7 +19,7 @@ from config import DB_CONFIG
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
 TARGET_PERCENT = 0.02
-BACKTEST_START_DATE = pd.to_datetime("2024-06-27")
+BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 TEST_PERIOD_DAYS = 300
 SEQ_LEN = 5
 BATCH_SIZE = 32
@@ -72,8 +72,6 @@ STANDARD_COLS = [
     'Momentum_5',
     'Momentum_10',
     'Momentum_20', 
-    # 이동평균 대비
-    'Price_vs_MA20', 
     # Disparity
     'Disparity_5',
     'Disparity_5_Slope',
@@ -84,7 +82,6 @@ STANDARD_COLS = [
     'MA_20_slope',
     'MA_20_slope_norm',
     'MA5_MA20_gap',
-    'MA5_vs_MA20_Gap',
     'MA_std_5_10_20', 
     # 변동성
     'Volatility_5',
@@ -94,7 +91,7 @@ STANDARD_COLS = [
     'MACD_Histogram_Slope', 
     # RSI
     'RSI_Slope', 
-    # 거시 지표 변화량 
+    # 거시 지표 변화량
     'USD_KRW_RET',
     'USD_KRW_Momentum',
     'USD_KRW_DEVIATION',
@@ -107,21 +104,21 @@ STANDARD_COLS = [
     # 최근 고점/저점 대비
     'Price_vs_high_20d',
     'Price_vs_low_20d',
-    # 시장 간 스프레드 
+    # 시장 간 스프레드
     'KOSPI_vs_KOSDAQ', 
 ]
 
 MINMAX_COLS = [
     # 레벨 값
     'Close',
-    'LogVolume', 
-    'TradingValue', 
+    'LogVolume',
+    'TradingValue',
     'TradingValue_Ratio', 
     # 수준 지표
     'RSI_n',
-    'KOSPI', 
-    'KOSDAQ', 
-    'USD_KRW', 
+    'KOSPI',
+    'KOSDAQ',
+    'USD_KRW',
     'USD_KRW_MA_5', 
     # 밴드/확률형 지표 (0~1 or 0~100)
     'BB_PCT',
@@ -148,7 +145,7 @@ BINARY_COLS = [
     'MA20_above_MA60',
     'Strong_Trend', 
     # 환율↓+MACD↑, 거래량+MACD 콤보, 복합 매수 시그널
-    'USD_down_MACD_up', 
+    'USD_down_MACD_up',
     'MACD_cross_up',
     'MACD_cross_down',
     'MACD_bullish_cross',
@@ -235,9 +232,10 @@ def engineer_features(df):
     df['Volatility_ratio_5_20'] = df['Volatility_5'] / df['Close'].rolling(20).std()
 
     # --- 이동 평균 / 추세 ---
+    df['MA_5'] = df['Close'].rolling(5).mean()
+    df['MA_10'] = df['Close'].rolling(10).mean()
     df['MA_20'] = df['Close'].rolling(20).mean()
     df['MA_60'] = df['Close'].rolling(60).mean()
-    df['Price_vs_MA20'] = df['Close'] / df['MA_20'] - 1
     df['Disparity_5'] = df['Close'] / df['Close'].rolling(5).mean() - 1
     df['Disparity_10'] = df['Close'] / df['Close'].rolling(10).mean() - 1
     df['Disparity_20'] = df['Close'] / df['Close'].rolling(20).mean() - 1
@@ -246,12 +244,11 @@ def engineer_features(df):
     df['MA_5_slope'] = df['Close'].rolling(5).mean().diff().fillna(0)
     df['MA_20_slope_norm'] = df['MA_20_slope'] / df['MA_20'].shift(1)
     df['MA5_MA20_gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
-    df['MA_std_5_10_20'] = df['Close'].rolling(5).mean().rolling(5).std().fillna(0)
+    df['MA_std_5_10_20'] = df[['MA_5', 'MA_10', 'MA_20']].std(axis=1)
     df['Breaks_MA_20'] = (df['Close'] > df['MA_20']).astype(int)
     df['Breaks_MA_5'] = (df['Close'] > df['Close'].rolling(5).mean()).astype(int)
     df['MA20_above_MA60'] = (df['MA_20'] > df['MA_60']).astype(int)
     df['Strong_Trend'] = ((df['MA_5_slope'] > 0) & (df['MA20_above_MA60'] == 1)).astype(int)
-    df['MA5_vs_MA20_Gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
 
     # --- RSI ---
     df['RSI_n'] = compute_rsi(df['Close'], 2)
@@ -606,6 +603,7 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
 # 오늘 매수후보 리스트 생성
 def predict_today_candidates(engine=None):
     today_date = pd.Timestamp.today().normalize()
+    output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")   # 파일명 고정
 
     if engine is None:
         engine = get_engine()
@@ -642,17 +640,26 @@ def predict_today_candidates(engine=None):
 
             if prob[0] >= PROB_THRESHOLD:
                 buy_candidates.append({
-                    'code': code,
-                    'prob_up': prob[0],
-                    'price': window['Close'].iloc[-1]
+                    '종목코드': code,
+                    '상승확률': round(prob[0], 3)   # 소수점 셋째 자리 반올림
                 })
 
         except Exception as e:
             print(f"[{code}] 예측 실패: {e}")
             continue
 
-    # 모든 후보를 확률 기준으로 정렬만 하고 전부 반환
-    return sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
+    # 확률 기준으로 정렬
+    buy_candidates_sorted = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
+
+    # 무조건 CSV 저장
+    if buy_candidates_sorted:
+        df_out = pd.DataFrame(buy_candidates_sorted)
+        df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
+        print(f"[predict_today_candidates] 매수 후보 {len(df_out)}개를 CSV로 저장: {output_path}")
+    else:
+        print(f"[predict_today_candidates] 매수 후보 없음. CSV 파일 저장하지 않음.")
+
+    return buy_candidates_sorted
         
 # ------------------- 메인 -------------------
 def main():
