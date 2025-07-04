@@ -603,7 +603,7 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
 # 오늘 매수후보 리스트 생성
 def predict(engine=None):
     today_date = pd.Timestamp.today().normalize()
-    output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")   # 파일명 고정
+    output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")  
 
     if engine is None:
         engine = get_engine()
@@ -644,20 +644,15 @@ def predict(engine=None):
                     '상승확률': round(prob[0], 3)   # 소수점 셋째 자리 반올림
                 })
 
-        except Exception as e:
-            print(f"[{code}] 예측 실패: {e}")
+        except Exception:
             continue
 
     # 확률 기준으로 정렬
     buy_candidates_sorted = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
 
-    # 무조건 CSV 저장
-    if buy_candidates_sorted:
-        df_out = pd.DataFrame(buy_candidates_sorted)
-        df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
-        print(f"[predict_today_candidates] 매수 후보 {len(df_out)}개를 CSV로 저장: {output_path}")
-    else:
-        print(f"[predict_today_candidates] 매수 후보 없음. CSV 파일 저장하지 않음.")
+    # CSV 저장 (후보가 없어도 헤더만 있는 파일 생성)
+    df_out = pd.DataFrame(buy_candidates_sorted, columns=['종목코드', '상승확률'])
+    df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
 
     return buy_candidates_sorted
         
