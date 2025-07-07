@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 from auto_pipeline import run_auto_pipeline
 from apscheduler.schedulers.background import BackgroundScheduler
-from rule_3 import auto_trading_loop
+from experiment import auto_trading_loop
 import threading
 from functions import read_trades_mysql
 from flask_sqlalchemy import SQLAlchemy

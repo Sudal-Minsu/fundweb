@@ -16,116 +16,120 @@ import pandas_datareader.data as web
 today = datetime.date.today()
 start_date = today - datetime.timedelta(days=365 * 12)  
 
-
 """ MySQL DB 연결 함수 """
 def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
 
+# 네이버 금융에서 사용할 필드 IDs 동적 추출 함수
+def fetch_field_ids(market_type):
+    # 첫 페이지 GET
+    url = f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page=1'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    res = requests.get(url, headers=headers)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    subcnt = soup.select_one('div.subcnt_sise_item_top')
+    field_ids = [ipt['value'] for ipt in subcnt.select('input[name=fieldIds]')]
+    return field_ids
 
-""" 최대 300개 뽑은 다음 그 중에서 200개 추출 """
+# 각 페이지에서 POST 요청으로 데이터를 가져오는 함수
+def fetch_market_page(market_type, page, field_ids):
+    data = {
+        'menu': 'market_sum',
+        'fieldIds': field_ids,
+        'returnUrl': f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page={page}'
+    }
+    res = requests.post('https://finance.naver.com/sise/field_submit.nhn', data=data)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    table = soup.select_one('table.type_2')
+    html_str = str(table)
+    df = pd.read_html(StringIO(html_str), flavor='bs4')[0]
+    df = df.dropna(how='all')
+    # 종목코드 추출
+    codes = [a['href'].split('=')[-1] for a in soup.select('table.type_2 a.tltle')]
+    df = df.iloc[:len(codes)]
+    df['종목코드'] = codes
+    return df
+
+# 유니버스 추출 함수
+# ROE, PER, 시가총액을 모두 활용하며 각각 가중치 적용
 def get_top_200_codes():
-    
-    """ 종목들의 투자지표(ROE, PER, 시가총액)를 크롤링해서 dataframe으로 정리 """
-    def get_stock_data(market_type):
-        all_data = []
-        for page in tqdm(range(1, 50), desc=f"{'코스피' if market_type == 0 else '코스닥'} 종목 크롤링"):
-            url = f'https://finance.naver.com/sise/sise_market_sum.naver?sosok={market_type}&page={page}'
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers)
-            soup = BeautifulSoup(res.text, 'html.parser')
-            table = soup.select_one('table.type_2')
-            html_str = str(table)
+    all_markets = []
+    for market_type in [0, 1]:  # 0: KOSPI, 1: KOSDAQ
+        # 동적 필드 추출 및 페이지 수 확인
+        field_ids = fetch_field_ids(market_type)
+        # 전체 페이지 수
+        first_page = requests.get(
+            f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page=1',
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        first_soup = BeautifulSoup(first_page.text, 'html.parser')
+        pgRR = first_soup.select_one('td.pgRR > a')
+        total_pages = int(pgRR['href'].split('=')[-1])
 
-            # StringIO를 사용하여 HTML 테이블 문자열을 파일처럼 처리(pandas future warning 방지)
-            df = pd.read_html(StringIO(html_str), flavor="bs4")[0]
-            # HTML 테이블의 모든 값이 NaN인 행은 제거(레이아웃용 빈 줄 제거, 이후 특정 컬럼이 NaN인 행도 제거함)
-            df = df.dropna(how='all')
+        # 병렬 없이 진행 (필요시 ThreadPoolExecutor 적용)
+        market_data = []
+        for page in tqdm(range(1, total_pages + 1), desc=f"{'코스피' if market_type==0 else '코스닥'} 크롤링"):
+            try:
+                df_page = fetch_market_page(market_type, page, field_ids)
+                market_data.append(df_page)
+                time.sleep(0.2)
+            except Exception:
+                continue
+        df_market = pd.concat(market_data, ignore_index=True)
+        df_market['시장'] = '코스피' if market_type==0 else '코스닥'
+        all_markets.append(df_market)
 
-            # 종목코드 추출
-            codes = []
-            for a in soup.select('table.type_2 a.tltle'):
-                href = a.get('href')
-                code = href.split('=')[-1]
-                codes.append(code)
+    df = pd.concat(all_markets, ignore_index=True)
 
-            # df의 행 수를 종목코드 개수만큼 자르기(read_html()로 뽑은 테이블의 종목 외의 다른 행 존재 가능성 고려)
-            df = df.iloc[:len(codes)]
-            df['종목코드'] = codes
-            all_data.append(df)
-            time.sleep(0.3)
+    # 관심 필드: PER, ROE, 시가총액
+    cols = ['PER', 'ROE', '시가총액']
+    # 대체 결측값 처리
+    df.replace({'-': None, ',': ''}, regex=True, inplace=True)
+    df = df.dropna(subset=cols + ['종목코드'])
 
-        # 합치고 새로운 연속된 인덱스를 부여
-        final_df = pd.concat(all_data, ignore_index=True)
-        final_df['시장'] = '코스피' if market_type == 0 else '코스닥'
-        return final_df
+    for c in cols:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df = df.dropna(subset=cols)
+    # 모두 양수만
+    df = df[(df['PER']>0) & (df['ROE']>0) & (df['시가총액']>0)]
 
-    kospi_df = get_stock_data(0)
-    kosdaq_df = get_stock_data(1)
-    df = pd.concat([kospi_df, kosdaq_df], ignore_index=True)
-
-    # ROE, PER, 시가총액 컬럼만 선택 
-    df = df[['종목코드', '종목명', '시장', 'PER', 'ROE', '시가총액']]
-    df = df.replace('-', None).dropna(subset=['PER', 'ROE', '시가총액'])
-
-    # PER, ROE, 시가총액을 숫자로 변환 (실패 시 NaN 처리)
-    df['PER'] = pd.to_numeric(df['PER'], errors='coerce')
-    df['ROE'] = pd.to_numeric(df['ROE'], errors='coerce')
-    df['시가총액'] = df['시가총액'].replace(',', '', regex=True)
-    df['시가총액'] = pd.to_numeric(df['시가총액'], errors='coerce')
-
-    df = df.dropna(subset=['PER', 'ROE', '시가총액'])
-    df = df[df['PER'] > 0]
-
-    # 1/PER 계산
-    df['1/PER'] = 1 / df['PER']
-
-    # 각 항목에 대해 순위 부여 (값이 클수록 좋은 순위니까 내림차순: 최고가 1등)
+    # 파생 지표
+    df['invPER'] = 1 / df['PER']
+    # 랭킹
     df['ROE_rank'] = df['ROE'].rank(ascending=False)
-    df['invPER_rank'] = df['1/PER'].rank(ascending=False)
+    df['invPER_rank'] = df['invPER'].rank(ascending=False)
     df['시총_rank'] = df['시가총액'].rank(ascending=False)
 
-    # 가중치 부여: 0.3 * ROE_rank + 0.3 * invPER_rank + 0.4 * 시총_rank 
-    # (숫자가 낮을수록 상위. weighted_score가 낮은 순으로 좋음)
-    df['weighted_score'] = 0.3 * df['ROE_rank'] + 0.3 * df['invPER_rank'] + 0.4 * df['시총_rank']
+    # 가중합
+    df['weighted_score'] = (
+        0.3*df['ROE_rank'] +
+        0.3*df['invPER_rank'] +
+        0.4*df['시총_rank']
+    )
 
-    # weighted_score 기준 오름차순 정렬 후, 중복 종목코드를 제거하고 상위 250개 종목 추출
-    top_pool = df.sort_values('weighted_score').drop_duplicates(subset='종목코드').head(300)
-    top_codes_pool = top_pool['종목코드'].tolist()
+    # 상위 300개 후보
+    top_pool = df.sort_values('weighted_score').drop_duplicates('종목코드').head(300)
+    top_codes = top_pool['종목코드'].tolist()
 
-    print("\n[FDR 데이터 확인 중: 거래량 0 없는 종목 선별]")
-    valid_codes_with_start = []  # (code, start_date) 저장
-    for code in tqdm(top_codes_pool, desc="조건 필터링 중"):
+    # FDR 필터링
+    valid = []
+    for code in tqdm(top_codes, desc="FDR 필터링"):
         try:
-            df_stock = fdr.DataReader(code, start_date, today)
-            # 상장일이 start_date 이후면 제외
-            # 실제 상장일 = 데이터 시작일
-            first_date = df_stock.index.min().date()
-            # 데이터가 2800일 이상 있어야 함 (10년치면 보통 2400일 이상)
-            if len(df_stock) >= 2800:
-                # 최근 100일 데이터 추출
-                recent_100 = df_stock.tail(100)
-                # 최근 100일 중 거래량 결측 또는 1 이하인 날이 50일 초과면 제외
-                low_volume_days = recent_100['Volume'].isna().sum() + (recent_100['Volume'] <= 1).sum()
-                if low_volume_days <= 50:
-                    valid_codes_with_start.append((code, first_date))
-
-        except Exception:
+            hist = fdr.DataReader(code, start_date, today)
+            first_date = hist.index.min().date()
+            if len(hist) >= 2800:
+                recent = hist.tail(100)
+                low_vol = recent['Volume'].isna().sum() + (recent['Volume']<=1).sum()
+                if low_vol <= 50:
+                    valid.append((code, first_date))
+        except:
             continue
-
-    # 가장 오래된 종목의 상장일 기준 잡기
-    if not valid_codes_with_start:
-        print("\n[경고] 조건을 만족하는 종목이 없습니다.")
+    if not valid:
+        print("[경고] 조건 만족 종목 없음.")
         return []
-
-    # 기준일 설정 (가장 오래된 종목의 시작일)
-    oldest_start_date = min(date for _, date in valid_codes_with_start)
-    print(f"\n기준일: {oldest_start_date}")
-
-    # 이 날짜보다 늦게 상장한 종목은 제외
-    final_valid_codes = [code for code, date in valid_codes_with_start if date <= oldest_start_date]
-
-    print(f"최종 조건 만족 종목 수: {len(final_valid_codes)}개")
-    return final_valid_codes[:200]
+    base_date = min(d for _, d in valid)
+    final = [c for c,d in valid if d <= base_date]
+    return final[:200]
 
 
 """ 종목의 데이터 저장 """

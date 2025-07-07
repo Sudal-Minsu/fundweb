@@ -17,6 +17,13 @@ import multiprocessing as mp
 from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
+<<<<<<< HEAD
+=======
+TRAIN_YEARS = 12
+TARGET_PERCENT = 0.02
+BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
+TEST_PERIOD_DAYS = 300
+>>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
 SEQ_LEN = 5
 TRAIN_YEARS = 12
 TEST_PERIOD_DAYS = 60
@@ -65,8 +72,6 @@ STANDARD_COLS = [
     'Momentum_5',
     'Momentum_10',
     'Momentum_20', 
-    # 이동평균 대비
-    'Price_vs_MA20', 
     # Disparity
     'Disparity_5',
     'Disparity_5_Slope',
@@ -77,7 +82,6 @@ STANDARD_COLS = [
     'MA_20_slope',
     'MA_20_slope_norm',
     'MA5_MA20_gap',
-    'MA5_vs_MA20_Gap',
     'MA_std_5_10_20', 
     # 변동성
     'Volatility_5',
@@ -160,19 +164,6 @@ BINARY_COLS = [
 CONTINUOUS_COLS = STANDARD_COLS + MINMAX_COLS 
 FEATURE_COLUMNS = CONTINUOUS_COLS + BINARY_COLS
 
-# ------------------- 스케일링 -------------------
-def scale_features(df, scalers): 
-    if df.empty:
-        raise ValueError("[scale_features] 입력 데이터프레임이 비어 있습니다.")
-    parts = []
-    if 'minmax' in scalers:
-        parts.append(scalers['minmax'].transform(df[MINMAX_COLS]))
-    if 'standard' in scalers:
-        parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
-    if BINARY_COLS:
-        parts.append(df[BINARY_COLS].values)
-    return np.concatenate(parts, axis=1)
-
 # ------------------- DB & 데이터 로딩 -------------------
 def get_engine():
     return create_engine(
@@ -240,9 +231,10 @@ def engineer_features(df):
     df['Volatility_ratio_5_20'] = df['Volatility_5'] / df['Close'].rolling(20).std()
 
     # --- 이동 평균 / 추세 ---
+    df['MA_5'] = df['Close'].rolling(5).mean()
+    df['MA_10'] = df['Close'].rolling(10).mean()
     df['MA_20'] = df['Close'].rolling(20).mean()
     df['MA_60'] = df['Close'].rolling(60).mean()
-    df['Price_vs_MA20'] = df['Close'] / df['MA_20'] - 1
     df['Disparity_5'] = df['Close'] / df['Close'].rolling(5).mean() - 1
     df['Disparity_10'] = df['Close'] / df['Close'].rolling(10).mean() - 1
     df['Disparity_20'] = df['Close'] / df['Close'].rolling(20).mean() - 1
@@ -251,12 +243,11 @@ def engineer_features(df):
     df['MA_5_slope'] = df['Close'].rolling(5).mean().diff().fillna(0)
     df['MA_20_slope_norm'] = df['MA_20_slope'] / df['MA_20'].shift(1)
     df['MA5_MA20_gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
-    df['MA_std_5_10_20'] = df['Close'].rolling(5).mean().rolling(5).std().fillna(0)
+    df['MA_std_5_10_20'] = df[['MA_5', 'MA_10', 'MA_20']].std(axis=1)
     df['Breaks_MA_20'] = (df['Close'] > df['MA_20']).astype(int)
     df['Breaks_MA_5'] = (df['Close'] > df['Close'].rolling(5).mean()).astype(int)
     df['MA20_above_MA60'] = (df['MA_20'] > df['MA_60']).astype(int)
     df['Strong_Trend'] = ((df['MA_5_slope'] > 0) & (df['MA20_above_MA60'] == 1)).astype(int)
-    df['MA5_vs_MA20_Gap'] = df['Close'].rolling(5).mean() / df['MA_20'] - 1
 
     # --- RSI ---
     df['RSI_n'] = compute_rsi(df['Close'], 2)
@@ -314,6 +305,7 @@ def engineer_features(df):
     df.sort_values('Date', inplace=True)
     return df
 
+<<<<<<< HEAD
 # ------------------- 시퀀스 생성 함수 -------------------
 def prepare_sequences(features, close_prices, target_percent):
     sequences, targets = [], []
@@ -332,6 +324,8 @@ def prepare_sequences(features, close_prices, target_percent):
         targets.append(label)
     return np.array(sequences), np.array(targets)
 
+=======
+>>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
     def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None, mask_scale=0.3):
@@ -368,7 +362,38 @@ class StockModel(nn.Module):
         out = self.global_dropout(out)
         out = self.fc2(out)
         return out
-    
+
+# ------------------- 시퀀스 생성 함수 -------------------
+def prepare_sequences(features, close_prices):
+    sequences, targets = [], []
+    max_i = len(features) - SEQ_LEN 
+    for i in range(max_i):
+        window = features[i: i + SEQ_LEN]
+        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
+        future_price = close_prices[i + SEQ_LEN] # 오늘
+        if future_price >= base_price * (1 + TARGET_PERCENT):
+            label = 0  # 상승
+        elif future_price <= base_price * (1 - TARGET_PERCENT):
+            label = 1  # 하락
+        else:
+            continue
+        sequences.append(window)
+        targets.append(label)
+    return np.array(sequences), np.array(targets)
+
+# ------------------- 스케일링 -------------------
+def scale_features(df, scalers): 
+    if df.empty:
+        raise ValueError("[scale_features] 입력 데이터프레임이 비어 있습니다.")
+    parts = []
+    if 'minmax' in scalers:
+        parts.append(scalers['minmax'].transform(df[MINMAX_COLS]))
+    if 'standard' in scalers:
+        parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
+    if BINARY_COLS:
+        parts.append(df[BINARY_COLS].values)
+    return np.concatenate(parts, axis=1)
+
 # ------------------- 학습 함수 -------------------
 def train_model(df_train, early_stopping_patience=3):
     # --- 1. 검증 누수 방지: 학습 데이터 앞 70%만으로 스케일러 fit ---
@@ -808,8 +833,9 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
     plt.close()
 
 # 오늘 매수후보 리스트 생성
-def predict_today_candidates(engine=None):
+def predict(engine=None):
     today_date = pd.Timestamp.today().normalize()
+    output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")  
 
     if engine is None:
         engine = get_engine()
@@ -845,19 +871,35 @@ def predict_today_candidates(engine=None):
 
             if prob[0] >= BUY_PROB_THRESHOLD:
                 buy_candidates.append({
+<<<<<<< HEAD
                     'code': code,
                     'prob_up': prob[0],
                     'prob_down': prob[1],
                     'price': window['Close'].iloc[-1]
+=======
+                    '종목코드': code,
+                    '상승확률': round(prob[0], 3)   # 소수점 셋째 자리 반올림
+>>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
                 })
 
-        except Exception as e:
-            print(f"[{code}] 예측 실패: {e}")
+        except Exception:
             continue
 
+<<<<<<< HEAD
     top_candidates = sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
     return top_candidates[:TOP_N_FOR_BUY]
 
+=======
+    # 확률 기준으로 정렬
+    buy_candidates_sorted = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
+
+    # CSV 저장 (후보가 없어도 헤더만 있는 파일 생성)
+    df_out = pd.DataFrame(buy_candidates_sorted, columns=['종목코드', '상승확률'])
+    df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
+
+    return buy_candidates_sorted
+        
+>>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
 # ------------------- 메인 -------------------
 def main():
     # 1) db 연결
