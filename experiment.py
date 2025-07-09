@@ -5,21 +5,64 @@ from datetime import datetime
 import time
 from rule_2 import predict
 
-#predict()
-
 import pandas as pd
+import pymysql
 
-# 데이터 예제
-data = [
-    {"종목코드": "005930", "상승확률": 0.72, "기대수익": "₩1200", "손익비": 2.1, "매수제안": "매수"},
-    {"종목코드": "035720", "상승확률": 0.69, "기대수익": "₩850", "손익비": 1.6, "매수제안": "매수"},
-    {"종목코드": "000660", "상승확률": 0.55, "기대수익": "₩300", "손익비": 1.2, "매수제안": "제외"},
-]
+# CSV 파일 불러오기
+df = pd.read_csv("stock_data.csv", encoding="utf-8-sig")
 
-df = pd.DataFrame(data)
-df.to_csv("stock_data.csv", index=False, encoding="utf-8-sig")
+conn = pymysql.connect(**DB_CONFIG)
+cursor = conn.cursor()
 
-print("CSV 파일 생성 완료: stock_data.csv")
+# ✅ 테이블이 없으면 생성
+create_table_query = """
+CREATE TABLE IF NOT EXISTS stock_recommendations (
+    종목코드 VARCHAR(10) PRIMARY KEY,
+    상승확률 FLOAT,
+    기대수익 INT,
+    손익비 FLOAT,
+    매수제안 VARCHAR(10)
+);
+"""
+cursor.execute(create_table_query)
+
+# INSERT 쿼리 준비
+insert_query = """
+INSERT INTO stock_recommendations (종목코드, 상승확률, 기대수익, 손익비, 매수제안)
+VALUES (%s, %s, %s, %s, %s)
+ON DUPLICATE KEY UPDATE
+    상승확률 = VALUES(상승확률),
+    기대수익 = VALUES(기대수익),
+    손익비 = VALUES(손익비),
+    매수제안 = VALUES(매수제안);
+"""
+
+# 각 행을 튜플로 변환 후 삽입
+data_tuples = list(df.itertuples(index=False, name=None))
+cursor.executemany(insert_query, data_tuples)
+conn.commit()
+
+print("✅ CSV 데이터 삽입 완료!")
+
+# 연결 종료
+cursor.close()
+conn.close()
+
+
+
+
+
+# # 데이터 예제
+# data = [
+#     {"종목코드": "005930", "상승확률": 0.72, "기대수익": 1200, "손익비": 2.1, "매수제안": "매수"},
+#     {"종목코드": "035720", "상승확률": 0.69, "기대수익": 850, "손익비": 1.6, "매수제안": "매수"},
+#     {"종목코드": "000660", "상승확률": 0.55, "기대수익": 300, "손익비": 1.2, "매수제안": "제외"},
+# ]
+
+# df = pd.DataFrame(data)
+# df.to_csv("stock_data.csv", index=False, encoding="utf-8-sig")
+
+# print("CSV 파일 생성 완료: stock_data.csv")
 
 
 def auto_trading_loop(
