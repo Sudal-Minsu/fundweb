@@ -3,7 +3,6 @@ from config import ACCOUNT_INFO, DB_CONFIG
 import requests, json, time
 from datetime import datetime
 import time
-from rule_2 import predict
 
 import pandas as pd
 import pymysql
