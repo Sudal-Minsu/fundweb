@@ -8,7 +8,7 @@ import pandas as pd
 import pymysql
 
 # CSV 파일 불러오기
-df = pd.read_csv("stock_data.csv", encoding="utf-8-sig")
+df = pd.read_csv("stock_data.csv", encoding="utf-8-sig", dtype={"종목코드": str})
 
 conn = pymysql.connect(**DB_CONFIG)
 cursor = conn.cursor()

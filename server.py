@@ -6,7 +6,6 @@ import pandas as pd
 from datetime import datetime
 from auto_pipeline import run_auto_pipeline
 from apscheduler.schedulers.background import BackgroundScheduler
-from experiment import auto_trading_loop
 import threading
 from functions import read_trades_mysql
 from flask_sqlalchemy import SQLAlchemy
@@ -28,6 +27,24 @@ with app.app_context():
 
 trading_thread = None
 
+@app.route('/ping')
+def show_table():
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM stock_recommendations")
+        rows = cursor.fetchall()
+
+    except Exception as e:
+        print("❌ DB 오류 발생:", e)
+        return f"<h2>DB 에러: {e}</h2>"
+
+    finally:
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
+    
+
+    return render_template('ping.html', data=rows)
 
 
 

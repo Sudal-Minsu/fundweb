@@ -1,46 +1,52 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
-    <title>거래 내역</title>
+    <meta charset="UTF-8">
+    <title>주식 추천</title>
     <style>
         table {
-            width: 100%;
             border-collapse: collapse;
+            width: 80%;
+            margin: 30px auto;
         }
         th, td {
-            padding: 8px;
             border: 1px solid #ccc;
+            padding: 8px 12px;
+            text-align: center;
         }
         th {
-            background-color: #f2f2f2;
+            background-color: #f9f9f9;
+        }
+        caption {
+            caption-side: top;
+            font-size: 1.6em;
+            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
-    <h2>✅ 서버는 살아 있고 트레이딩도 작동 중입니다</h2>
-    <h3>📊 거래 내역</h3>
-    {% if trades %}
     <table>
+        <caption>📈 주식 추천 테이블</caption>
         <thead>
             <tr>
-                {% for col in trades[0].keys() %}
-                <th>{{ col }}</th>
-                {% endfor %}
+                <th>종목코드</th>
+                <th>상승확률</th>
+                <th>기대수익</th>
+                <th>손익비</th>
+                <th>매수제안</th>
             </tr>
         </thead>
         <tbody>
-            {% for row in trades %}
-            <tr>
-                {% for val in row.values() %}
-                <td>{{ val }}</td>
-                {% endfor %}
-            </tr>
-            {% endfor %}
+        {% for row in data %}
+        <tr>
+            <td>{{ row[0] }}</td>  {# 종목코드 #}
+            <td>{{ row[1] }}</td>  {# 상승확률 #}
+            <td>{{ row[2] }}</td>  {# 기대수익 #}
+            <td>{{ row[3] }}</td>  {# 손익비 #}
+            <td>{{ row[4] }}</td>  {# 매수제안 #}
+        </tr>
+        {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <p>거래 내역이 없습니다.</p>
-    {% endif %}
 </body>
 </html>
-
