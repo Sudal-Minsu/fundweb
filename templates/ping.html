@@ -6,7 +6,7 @@
     <style>
         table {
             border-collapse: collapse;
-            width: 80%;
+            width: 90%;
             margin: 30px auto;
         }
         th, td {
@@ -22,6 +22,17 @@
             font-size: 1.6em;
             margin-bottom: 15px;
         }
+        input[type="number"] {
+            width: 60px;
+            padding: 4px;
+        }
+        button {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -34,19 +45,57 @@
                 <th>기대수익</th>
                 <th>손익비</th>
                 <th>매수제안</th>
+                <th>수량</th>
+                <th>매수</th>
             </tr>
         </thead>
         <tbody>
         {% for row in data %}
         <tr>
-            <td>{{ row[0] }}</td>  {# 종목코드 #}
-            <td>{{ row[1] }}</td>  {# 상승확률 #}
-            <td>{{ row[2] }}</td>  {# 기대수익 #}
-            <td>{{ row[3] }}</td>  {# 손익비 #}
-            <td>{{ row[4] }}</td>  {# 매수제안 #}
+            <td>{{ row[0] }}</td>
+            <td>{{ row[1] }}</td>
+            <td>{{ row[2] }}</td>
+            <td>{{ row[3] }}</td>
+            <td>{{ row[4] }}</td>
+            <td>
+                <input type="number" id="qty_{{ row[0] }}" value="10" min="1">
+            </td>
+            <td>
+                <button onclick="buyStock('{{ row[0] }}')">매수</button>
+            </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+
+    <script>
+        function buyStock(stockCode) {
+            const qtyInput = document.getElementById('qty_' + stockCode);
+            const quantity = parseInt(qtyInput.value) || 1;
+
+            fetch('/buy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    stock_code: stockCode,
+                    quantity: quantity
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === "success") {
+                    alert(`✅ 매수 완료!`);
+                } else {
+                    alert(`❌ 매수 실패: ${data.message}`);
+                }
+            })
+            .catch(err => {
+                alert("⚠ 서버 오류: " + err);
+            });
+        }
+    </script>
 </body>
 </html>
+

@@ -167,7 +167,78 @@ def execute_order(stock_code, quantity, order_type, order_style, app_key, app_se
         print(f"❌ {order_type} 실패: {res_json.get('msg1')}")
         return None
 
+# 🔹 거래 내역 MySQL 저장 함수
+def save_to_db(trade_table_name, stock_code, order_type, quantity, price, trade_time, profit=None, profit_rate=None):
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+    
+        
+        # 테이블이 없으면 생성
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {trade_table_name} (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                stock_code VARCHAR(10),
+                order_type VARCHAR(10),
+                quantity INT,
+                price INT,
+                trade_time DATETIME,
+                profit INT DEFAULT NULL,
+                profit_rate FLOAT DEFAULT NULL
+            )
+        """)
+        conn.commit()
+        
+        sql = f"""
+        INSERT INTO {trade_table_name} (stock_code, order_type, quantity, price, trade_time, profit, profit_rate)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(sql, (stock_code, order_type, quantity, price, trade_time, profit, profit_rate))
 
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print(f"✅ 거래 내역 저장 완료: {stock_code}, {order_type}, {quantity}주, {price}원, {trade_time}, 수익: {profit}, 수익률: {profit_rate}%")
+    except Exception as e:
+        print(f"❌ MySQL 저장 오류: {e}")
+
+def single_trade(stock_code, quantity, order_type="매수", order_style="시장가"):
+    app_key, app_secret, access_token = get_auth_info()
+
+    print(f"\n🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 매매 요청 수신")
+
+    # 1. 주문 실행
+    order_no = execute_order(
+        stock_code=stock_code,
+        quantity=quantity,
+        order_type=order_type,
+        order_style=order_style,
+        app_key=app_key,
+        app_secret=app_secret,
+        access_token=access_token
+    )
+
+    time.sleep(3)  # 체결 대기
+
+    # 2. 수익 확인
+    _, res2 = check_account(access_token, app_key, app_secret)
+    profit = int(res2['asst_icdc_amt'])
+    profit_rate = float(res2['asst_icdc_erng_rt']) * 100
+    trade_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 3. DB 저장
+    save_to_db(
+        trade_table_name="trade_history",
+        stock_code=stock_code,
+        order_type=order_type,
+        quantity=quantity,
+        price=None,
+        trade_time=trade_time,
+        profit=profit,
+        profit_rate=profit_rate
+    )
+
+    return {"status": "success", "order_no": order_no, "profit": profit, "profit_rate": profit_rate}
 
 
 def check_account(access_token, app_key, app_secret):
@@ -264,40 +335,7 @@ def plot_profit(profit_log, profit_rate_log):
     plt.tight_layout()
     plt.pause(0.1)
 
-# 🔹 거래 내역 MySQL 저장 함수
-def save_to_db(trade_table_name, stock_code, order_type, quantity, price, trade_time, profit=None, profit_rate=None):
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-    
-        
-        # 테이블이 없으면 생성
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS {trade_table_name} (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                stock_code VARCHAR(10),
-                order_type VARCHAR(10),
-                quantity INT,
-                price INT,
-                trade_time DATETIME,
-                profit INT DEFAULT NULL,
-                profit_rate FLOAT DEFAULT NULL
-            )
-        """)
-        conn.commit()
-        
-        sql = f"""
-        INSERT INTO {trade_table_name} (stock_code, order_type, quantity, price, trade_time, profit, profit_rate)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        cursor.execute(sql, (stock_code, order_type, quantity, price, trade_time, profit, profit_rate))
 
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print(f"✅ 거래 내역 저장 완료: {stock_code}, {order_type}, {quantity}주, {price}원, {trade_time}, 수익: {profit}, 수익률: {profit_rate}%")
-    except Exception as e:
-        print(f"❌ MySQL 저장 오류: {e}")
 
 
 def read_trades_mysql(table_name):

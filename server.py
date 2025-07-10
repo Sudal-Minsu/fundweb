@@ -7,7 +7,7 @@ from datetime import datetime
 from auto_pipeline import run_auto_pipeline
 from apscheduler.schedulers.background import BackgroundScheduler
 import threading
-from functions import read_trades_mysql
+from functions import read_trades_mysql, single_trade
 from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
@@ -46,7 +46,17 @@ def show_table():
 
     return render_template('ping.html', data=rows)
 
+@app.route('/buy', methods=['POST'])
+def buy_stock():
+    data = request.get_json()
+    stock_code = data.get("stock_code")
+    quantity = int(data.get("quantity", 1))
 
+    try:
+        result = single_trade(stock_code=stock_code, quantity=quantity)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 
 @app.route('/backtest')
