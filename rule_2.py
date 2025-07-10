@@ -18,7 +18,6 @@ from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
-TARGET_PERCENT = 0.02
 BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 TEST_PERIOD_DAYS = 300
 SEQ_LEN = 5
@@ -155,16 +154,16 @@ class StockModel(nn.Module):
         return out
 
 # ------------------- 시퀀스 생성 함수 -------------------
-def prepare_sequences(features, close_prices):
+def prepare_sequences(features, close_prices, target_percent=0.02):
     sequences, targets = [], []
     max_i = len(features) - SEQ_LEN 
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
-        future_price = close_prices[i + SEQ_LEN] # 오늘
-        if future_price >= base_price * (1 + TARGET_PERCENT):
+        base_price = close_prices[i + SEQ_LEN - 1]
+        future_price = close_prices[i + SEQ_LEN]
+        if future_price >= base_price * (1 + target_percent):
             label = 0  # 상승
-        elif future_price <= base_price * (1 - TARGET_PERCENT):
+        elif future_price <= base_price * (1 - target_percent):
             label = 1  # 하락
         else:
             continue
