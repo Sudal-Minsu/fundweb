@@ -4,6 +4,82 @@
   <meta charset="UTF-8">
   <title>Backtest</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <script>
+    async function runModeling() {
+      const modelType = document.getElementById("model-type").value;
+      const symbol = document.getElementById("symbol").value;
+      const epochs = document.getElementById("epochs").value;
+      const windowSize = document.getElementById("window").value;
+      const batchSize = document.getElementById("batch").value;
+
+      const body = JSON.stringify({
+        model_type: modelType,
+        symbol: symbol,
+        epochs: epochs,
+        window_size: windowSize,
+        batch_size: batchSize
+      });
+
+      try {
+        const res = await fetch("/run-modeling", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body
+        });
+
+        const result = await res.json();
+
+        if (result.status === "ok") {
+          updateMetrics(result.metrics);
+          alert("학습이 완료되었습니다!");
+        } else if (result.status === "started") {
+          document.getElementById("modelStatus").innerText = "학습 시작됨...";
+          pollModelStatus();
+        } else {
+          alert("오류 발생: " + (result.message || "알 수 없는 오류"));
+        }
+      } catch (err) {
+        alert("실행 실패: " + err);
+      }
+    }
+
+    async function pollModelStatus() {
+      try {
+        const res = await fetch("/model-status");
+        const data = await res.json();
+        const statusBox = document.getElementById("modelStatus");
+
+        if (data.state === "running") {
+          statusBox.innerText = "학습 중...";
+          setTimeout(pollModelStatus, 1000);
+        } else if (data.state === "done") {
+          statusBox.innerText = "학습 완료!";
+          updateMetrics(data.metrics);
+        } else if (data.state === "error") {
+          statusBox.innerText = "학습 실패";
+          alert("오류 발생: " + (data.error || "알 수 없는 오류"));
+        } else {
+          statusBox.innerText = "대기 중";
+        }
+      } catch (e) {
+        document.getElementById("modelStatus").innerText = "상태 확인 실패";
+      }
+    }
+
+    function updateMetrics(metrics) {
+      if (!metrics) return;
+      document.getElementById("mape").innerText = metrics.mape + "%";
+      document.getElementById("rmse").innerText = metrics.rmse;
+      document.getElementById("accuracy").innerText = metrics.accuracy + "%";
+
+      if (metrics.plot_path) {
+        const img = document.getElementById("forecastImage");
+        img.src = metrics.plot_path + "?t=" + Date.now();
+        img.style.display = "block";
+        document.getElementById("forecastSection").open = true;
+      }
+    }
+  </script>
   <style>
     body {
       margin: 0;
@@ -34,10 +110,6 @@
       text-decoration: none;
       letter-spacing: 3px;
     }
-    .nav-links {
-      display: flex;
-      align-items: center;
-    }
     .nav-links a {
       margin-left: 12px;
       padding: 6px 12px;
@@ -65,206 +137,123 @@
       color: white;
       min-height: 600px;
     }
-    .graph-section {
-      margin: 40px 0;
-      padding: 10px;
+    h2 {
       text-align: center;
     }
-    .graph-section img {
-      width: 100%;
-      max-height: auto;
-      object-fit: contain;
-    }
-    .asset-text {
-      color: white;
-      font-size: 20px;
-      font-weight: bold;
-      text-align: center;
-      text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-      margin-top: 12px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 40px;
-    }
-    th, td {
-      border: 1px solid #999;
-      padding: 8px;
-      text-align: center;
+    .form-block {
       background-color: #444;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
     }
-    th {
-      background-color: #555;
-      color: #fff;
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+    select, input[type="number"] {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 16px;
+      background-color: #666;
+      color: white;
+      border: 1px solid #888;
+      border-radius: 4px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      margin-top: 10px;
+    }
+    select, input[type="number"], input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 16px;
+      background-color: #666;
+      color: white;
+      border: 1px solid #888;
+      border-radius: 4px;
+    }
+    details summary {
+      cursor: pointer;
+      padding: 10px;
+      font-weight: bold;
+      background-color: #2e2e2e;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    img#forecastImage {
+      width: 100%;
+      max-width: 800px;
+      margin-top: 10px;
+      border-radius: 8px;
+      display: none;
+    }
+    .status-line {
+      margin: 20px 0;
+      font-weight: bold;
+    }
+    .caption {
+      color: #aaa;
+      font-size: 14px;
+      margin-bottom: 10px;
+      text-align: center;
     }
   </style>
 </head>
-
 <body>
   <nav>
     <div class="nav-left">
       <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
       <a href="/home">StockLENS</a>
-      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">|  Backtest</span>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Backtest</span>
     </div>
     <div class="nav-links">
       <a href="/home" class="home-button">Home</a>
-      <a href="/papertrading">Paper Trading</a>
-      <a href="/backtest" class="active">Backtest</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/report">Report</a>
     </div>
   </nav>
 
   <div class="main">
-    <div style="text-align: center; margin-bottom: 30px;">
-      <button onclick="runBacktest()" style="padding: 10px 20px; font-size: 16px;">백테스트 실행</button>
+    <h2>▸ 주가 예측 모델 설정</h2>
+
+    <div class="form-block">
+        <label for="symbol">종목 코드 직접 입력</label>
+        <input type="text" id="symbol" placeholder="예: 005930.KS">
+
+      <label for="epochs">학습 Epochs</label>
+      <input type="number" id="epochs" value="30" min="1">
+
+      <label for="window">입력 시계열 길이</label>
+      <input type="number" id="window" value="20" min="1">
+
+      <label for="batch">배치 크기</label>
+      <input type="number" id="batch" value="32" min="1">
+
+      <button onclick="runModeling()">모델 학습 실행</button>
+
+      <div class="status-line">현재 상태: <span id="modelStatus">-</span></div>
     </div>
 
-    <div class="graph-section">
-      <img id="asset" src="/external/총 자산.png?t={{ timestamp }}" alt="Total Assets Graph">
-      <div class="asset-text">&lt;총 자산 변화 추이&gt;</div>
+    <h2>▸ 모델 평가</h2>
+
+    <div class="form-block">
+      <label>모델 평가 지표</label>
+      <ul>
+        <li>MAPE: <span id="mape">-</span></li>
+        <li>RMSE: <span id="rmse">-</span></li>
+        <li>예측 성공률: <span id="accuracy">-</span></li>
+      </ul>
     </div>
 
-    <div class="graph-section">
-      <img id="top" src="/external/상위 손실 곡선.png?t={{ timestamp }}" alt="Top Loss Graph">
-      <div class="asset-text">&lt;상위 손실 종목&gt;</div>
+    <div class="form-block">
+      <details id="forecastSection">
+        <summary>예측 결과 시각화</summary>
+        <img id="forecastImage" src="" alt="예측 그래프">
+      </details>
     </div>
-
-    <div class="graph-section">
-      <img id="bottom" src="/external/하위 손실 곡선.png?t={{ timestamp }}" alt="Bottom Loss Graph">
-      <div class="asset-text">&lt;하위 손실 종목&gt;</div>
-    </div>
-
-    <div class="graph-section">
-      <img id="shap" src="/external/shap_heatmap.png?t={{ timestamp }}" alt="SHAP Heatmap">
-      <div class="asset-text">&lt;SHAP 해석 결과&gt;</div>
-    </div>
-
-    {% if score_table %}
-    <h2 style="margin-top: 50px; font-family: Arial, sans-serif;">▸ 성능 지표 요약</h2>
-    <table>
-      <thead>
-        <tr>
-          {% for col in score_table[0].keys() %}
-          <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
-            {% if col == 'code' %}종목코드
-            {% elif col == 'precision' %}정밀도
-            {% elif col == 'recall' %}재현율
-            {% elif col == 'f1_score' %}F1 점수
-            {% elif col == 'train_loss' %}학습 손실
-            {% elif col == 'val_loss' %}검증 손실
-            {% else %}{{ col }}
-            {% endif %}
-          </th>
-          {% endfor %}
-
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in score_table %}
-        <tr>
-          {% for val in row.values() %}
-          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-
-    {% if success_rate_table %}
-    <h2 style="margin-top: 50px; font-family: Arial, sans-serif;">▸ 거래 성공률</h2>
-    <table>
-      <thead>
-        <tr>
-          {% for col in success_rate_table[0].keys() %}
-            <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
-              {% if col == 'code' %}종목코드
-              {% elif col == 'total_trades' %}총 거래 수
-              {% elif col == 'successful_trades' %}성공 거래 수
-              {% elif col == 'success_rate' %}성공률
-              {% elif col == 'avg_profit_pct' %}평균 수익률
-              {% else %}{{ col }}
-              {% endif %}
-            </th>
-          {% endfor %}
-
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in success_rate_table %}
-        <tr>
-          {% for val in row.values() %}
-          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-
-    {% if trade_log_table %}
-    <h2 style="margin-top: 50px; font-family: Arial, sans-serif;">▸ 최근 매매 로그 (최근 10건)</h2>
-    <table>
-      <thead>
-        <tr>
-                    {% for col in trade_log_table[0].keys() %}
-            <th style="white-space: nowrap; font-weight: bold; font-size: 14px;">
-              {% if col == 'code' %}종목코드
-              {% elif col == 'buy_date' %}매수일
-              {% elif col == 'buy_price' %}매수가
-              {% elif col == 'qty' %}수량
-              {% elif col == 'sell_date' %}매도일
-              {% elif col == 'sell_price' %}매도가
-              {% elif col == 'profit_pct' %}수익률(%)
-              {% elif col == 'success' %}성공 여부
-              {% elif col == 'sell_reason' %}매도 사유
-              {% else %}{{ col }}
-              {% endif %}
-            </th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in trade_log_table %}
-        <tr>
-          {% for val in row.values() %}
-          <td style="white-space: nowrap; font-size: 13px;">{{ val }}</td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
   </div>
-
-  <script>
-    function runBacktest() {
-      const button = document.querySelector("button");
-      button.disabled = true;
-      button.textContent = "실행 중...";
-
-      fetch("/run-backtest", { method: "POST" })
-        .then(res => res.json())
-        .then(data => {
-          if (data.status === "ok") {
-            const now = Date.now();
-            document.getElementById("asset").src = `/external/총 자산.png?t=${now}`;
-            document.getElementById("top").src = `/external/상위 손실 곡선.png?t=${now}`;
-            document.getElementById("bottom").src = `/external/하위 손실 곡선.png?t=${now}`;
-            document.getElementById("shap").src = `/external/shap_heatmap.png?t=${now}`;
-            alert("백테스트 완료!");
-            location.reload();
-          } else {
-            alert("오류 발생: " + data.message);
-          }
-        })
-        .catch(err => alert("실행 실패: " + err))
-        .finally(() => {
-          button.disabled = false;
-          button.textContent = "백테스트 실행";
-        });
-    }
-  </script>
 </body>
 </html>

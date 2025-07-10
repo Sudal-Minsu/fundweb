@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Report</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+    }
+    .nav-links a {
+      margin-left: 12px;
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 0 auto;
+      margin-bottom: 40px;
+      font-size: 14px;
+      text-align: center;
+      background-color: #2f2f2f;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 10px;
+    }
+    th {
+      background-color: #555;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Report</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/report" class="active">Report</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <h2 style="text-align: center;">▸ 모델 성능</h2>
+    <div id="confusionMatrixContainer" style="overflow-x:auto;"></div>
+
+    <h2 style="text-align: center; margin-top: 60px;">▸ 매매 로그</h2>
+    <div id="tradeLogContainer" style="overflow-x: auto; margin-top: 20px;"></div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", async function () {
+      const cmRes = await fetch("/confusion-data");
+      const cmData = await cmRes.json();
+      const cm = cmData.matrix;
+      const total = cmData.total;
+      const cmLabels = ["상승(0)", "하락(1)"];
+      const cmContainer = document.getElementById("confusionMatrixContainer");
+
+      const cmTable = document.createElement("table");
+      cmTable.style.width = "100%";
+
+      const makeCell = (text, bg, bold = false) => {
+        const td = document.createElement("td");
+        td.innerHTML = text;
+        td.style.padding = "10px";
+        td.style.minHeight = "80px"; // 세로 길이 증가
+        td.style.border = "1px solid #888";
+        td.style.backgroundColor = bg || "#2f2f2f";
+        td.style.color = "white";
+        if (bold) td.style.fontWeight = "bold";
+        return td;
+      };
+
+      const header = document.createElement("tr");
+      header.appendChild(makeCell("실제 \\ 예측", "#3a3a3a", true));
+      cmLabels.forEach(label => header.appendChild(makeCell(label, "#3a3a3a", true)));
+      header.appendChild(makeCell("합계", "#3a3a3a", true));
+      cmTable.appendChild(header);
+
+      for (let i = 0; i < 2; i++) {
+        const row = document.createElement("tr");
+        row.appendChild(makeCell(cmLabels[i], "#3a3a3a", true));
+        let rowSum = 0;
+        for (let j = 0; j < 2; j++) {
+          const val = cm[i][j];
+          rowSum += val;
+          const percent = ((val / total) * 100).toFixed(1);
+          const intensity = Math.floor((val / total) * 100);
+          const baseR = 60, baseG = 80, baseB = 40;
+          const bg = `rgb(${baseR + intensity}, ${baseG + intensity}, ${baseB})`;
+          row.appendChild(makeCell(`${val}<br><span style="font-size:12px;">(${percent}%)</span>`, bg));
+        }
+        row.appendChild(makeCell(rowSum, "#3a3a3a", true));
+        cmTable.appendChild(row);
+      }
+
+      const sumRow = document.createElement("tr");
+      sumRow.appendChild(makeCell("합계", "#3a3a3a", true));
+      for (let j = 0; j < 2; j++) {
+        const sum = cm[0][j] + cm[1][j];
+        sumRow.appendChild(makeCell(sum, "#3a3a3a", true));
+      }
+      sumRow.appendChild(makeCell(total, "#3a3a3a", true));
+      cmTable.appendChild(sumRow);
+      cmContainer.appendChild(cmTable);
+
+      // Trade log
+      const logRes = await fetch("/trade-log");
+      const logData = await logRes.json();
+      const container = document.getElementById("tradeLogContainer");
+
+      if (logData.length === 0) {
+        container.innerHTML = "<p style='text-align:center;'>📭 매매 로그가 없습니다.</p>";
+        return;
+      }
+
+      const table = document.createElement("table");
+      const headerRow = document.createElement("tr");
+      Object.keys(logData[0]).forEach(col => {
+        const th = document.createElement("th");
+        th.textContent = col;
+        th.style.backgroundColor = "#555";
+        th.style.color = "white";
+        th.style.padding = "8px";
+        th.style.border = "1px solid #888";
+        headerRow.appendChild(th);
+      });
+      table.appendChild(headerRow);
+
+      logData.forEach(row => {
+        const tr = document.createElement("tr");
+        Object.entries(row).forEach(([key, val]) => {
+          const td = document.createElement("td");
+          td.textContent = val;
+          td.style.padding = "8px";
+          td.style.border = "1px solid #888";
+          td.style.backgroundColor = "#444";
+          td.style.color = "white";
+
+          if (key.includes("수익률") || key.includes("익") || key.toLowerCase().includes("return")) {
+            const numeric = parseFloat(val);
+            if (!isNaN(numeric)) {
+              td.style.color = numeric > 0 ? "#ff5c5c" : numeric < 0 ? "#5caeff" : "white";
+              td.style.fontWeight = "bold";
+            }
+          }
+
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+
+      container.appendChild(table);
+    });
+  </script>
+</body>
+</html>
