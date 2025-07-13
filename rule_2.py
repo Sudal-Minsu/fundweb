@@ -25,7 +25,7 @@ BATCH_SIZE = 32
 LEARNING_RATE = 0.0005
 EPOCHS = 20
 VAL_LOSS_THRESHOLD = 0.693
-PROB_THRESHOLD = 0.65
+PERCENT = 5   
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
@@ -182,8 +182,23 @@ def scale_features(df, scalers):
         parts.append(scalers['standard'].transform(df[STANDARD_COLS]))
     return np.concatenate(parts, axis=1)
 
+# ------------------- 신뢰도 임계값 계산 -------------------
+def compute_confidence_threshold(model, val_loader, percentile=PERCENT):
+    confidences = [] # 검증셋의 각 샘플별 모델의 최대 확신도(softmax 최대값)”를 저장
+    model.eval()
+    with torch.no_grad():
+        for xb, yb in val_loader:
+            xb = xb.to(device)
+            probs = torch.softmax(model(xb), dim=1)
+            max_conf = probs.max(dim=1)[0].cpu().numpy()
+            confidences.extend(max_conf)
+    if not confidences:
+        return 1.0  # fallback, 집계 불가 상황
+    target_percentile = 100 - percentile
+    return np.percentile(confidences, target_percentile)
+
 # ------------------- 학습 함수 -------------------
-def train_model(df_train, code=None):
+def train_model(df_train, code=None, conf_percentile=PERCENT):
     
     # 종목별 시드 설정 (같은 종목이면 항상 같은 시드)
     seed = code_to_seed(code)
@@ -265,11 +280,13 @@ def train_model(df_train, code=None):
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model, scalers, best_val_loss 
+    # α 계산
+    alpha = compute_confidence_threshold(model, val_loader, percentile=conf_percentile)
+    return model, scalers, best_val_loss, alpha
 
 # ------------------- 학습, 예측, 평가, 매수 후보 -------------------
 def process_code_for_date(args):
-    code, data, date = args
+    code, data, date, conf_percentile = args
     df = data['df'] # 전처리된 주가 데이터
     
     # 1) 학습용 기간 설정
@@ -278,7 +295,7 @@ def process_code_for_date(args):
     df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
     # 2) 모델 학습
-    model, scalers, best_val = train_model(df_train, code=code)
+    model, scalers, best_val, alpha = train_model(df_train, code=code, conf_percentile=conf_percentile)
     if model is None or best_val is None or best_val >= VAL_LOSS_THRESHOLD:
         return code, {}
 
@@ -306,18 +323,24 @@ def process_code_for_date(args):
             true_label = 1
 
         if true_label is not None:
-            pred_class = None # 확신 없는 예측은 무시
-            # 예측 threshold로 판단
-            if prob[0] >= PROB_THRESHOLD:
-                pred_class = 0
-            elif prob[1] >= PROB_THRESHOLD:
-                pred_class = 1
-            result = {'true_label': true_label, 'pred_class': pred_class}
+            pred_class = None
+            # threshold(α) 이상일 때만 예측 인정
+            if max(prob) >= alpha:
+                if prob[0] > prob[1]:
+                    pred_class = 0
+                    result = {'true_label': true_label, 'pred_class': pred_class}
+                elif prob[1] > prob[0]:
+                    pred_class = 1
+                    result = {'true_label': true_label, 'pred_class': pred_class}
+                else:
+                    result = {}
+            else:
+                result = {}
 
     return code, result
 
 # ------------------- 테스트 -------------------
-def run_test(preproc_dfs, test_dates):
+def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
     # 각 종목 상태 저장
     stock_models = {code: {
         'df': df,
@@ -328,7 +351,7 @@ def run_test(preproc_dfs, test_dates):
     for date in tqdm(test_dates, desc='테스트'):
         codes = list(stock_models.keys())
         # 종목별로 바로 병렬 실행
-        parallel_input = [(code, stock_models[code], date) for code in codes]
+        parallel_input = [(code, stock_models[code], date, conf_percentile) for code in codes]
         results = Parallel(
             n_jobs=N_CORE,
             backend='loky',
@@ -438,7 +461,7 @@ def predict(engine=None):
             train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
             df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
 
-            model, scalers, best_val = train_model(df_train, code=code)
+            model, scalers, best_val, alpha = train_model(df_train, code=code, conf_percentile=PERCENT)
             if model is None or best_val is None or best_val >= VAL_LOSS_THRESHOLD:
                 continue
 
@@ -453,12 +476,11 @@ def predict(engine=None):
             with torch.no_grad():
                 prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-            if prob[0] >= PROB_THRESHOLD:
+            if max(prob) >= alpha and prob[0] > prob[1]:
                 buy_candidates.append({
                     '종목코드': code,
-                    '상승확률': round(prob[0], 3)   # 소수점 셋째 자리 반올림
+                    '상승확률': round(prob[0], 3)
                 })
-
         except Exception:
             continue
 
@@ -493,7 +515,7 @@ def main():
     test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
 
     # 5) 백테스트 실행
-    stock_models = run_test(preproc_dfs, test_dates)
+    stock_models = run_test(preproc_dfs, test_dates, conf_percentile=PERCENT)
 
     # 6) 결과 저장
     plot_score(stock_models)
