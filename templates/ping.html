@@ -1,46 +1,101 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
-    <title>거래 내역</title>
+    <meta charset="UTF-8">
+    <title>주식 추천</title>
     <style>
         table {
-            width: 100%;
             border-collapse: collapse;
+            width: 90%;
+            margin: 30px auto;
         }
         th, td {
-            padding: 8px;
             border: 1px solid #ccc;
+            padding: 8px 12px;
+            text-align: center;
         }
         th {
-            background-color: #f2f2f2;
+            background-color: #f9f9f9;
+        }
+        caption {
+            caption-side: top;
+            font-size: 1.6em;
+            margin-bottom: 15px;
+        }
+        input[type="number"] {
+            width: 60px;
+            padding: 4px;
+        }
+        button {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
         }
     </style>
 </head>
 <body>
-    <h2>✅ 서버는 살아 있고 트레이딩도 작동 중입니다</h2>
-    <h3>📊 거래 내역</h3>
-    {% if trades %}
     <table>
+        <caption>📈 주식 추천 테이블</caption>
         <thead>
             <tr>
-                {% for col in trades[0].keys() %}
-                <th>{{ col }}</th>
-                {% endfor %}
+                <th>종목코드</th>
+                <th>상승확률</th>
+                <th>기대수익</th>
+                <th>손익비</th>
+                <th>매수제안</th>
+                <th>수량</th>
+                <th>매수</th>
             </tr>
         </thead>
         <tbody>
-            {% for row in trades %}
-            <tr>
-                {% for val in row.values() %}
-                <td>{{ val }}</td>
-                {% endfor %}
-            </tr>
-            {% endfor %}
+        {% for row in data %}
+        <tr>
+            <td>{{ row[0] }}</td>
+            <td>{{ row[1] }}</td>
+            <td>{{ row[2] }}</td>
+            <td>{{ row[3] }}</td>
+            <td>{{ row[4] }}</td>
+            <td>
+                <input type="number" id="qty_{{ row[0] }}" value="10" min="1">
+            </td>
+            <td>
+                <button onclick="buyStock('{{ row[0] }}')">매수</button>
+            </td>
+        </tr>
+        {% endfor %}
         </tbody>
     </table>
-    {% else %}
-    <p>거래 내역이 없습니다.</p>
-    {% endif %}
+
+    <script>
+        function buyStock(stockCode) {
+            const qtyInput = document.getElementById('qty_' + stockCode);
+            const quantity = parseInt(qtyInput.value) || 1;
+
+            fetch('/buy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    stock_code: stockCode,
+                    quantity: quantity
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === "success") {
+                    alert(`✅ 매수 완료!`);
+                } else {
+                    alert(`❌ 매수 실패: ${data.message}`);
+                }
+            })
+            .catch(err => {
+                alert("⚠ 서버 오류: " + err);
+            });
+        }
+    </script>
 </body>
 </html>
 
