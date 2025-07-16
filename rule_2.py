@@ -17,13 +17,10 @@ import multiprocessing as mp
 from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
-<<<<<<< HEAD
-=======
 TRAIN_YEARS = 12
 TARGET_PERCENT = 0.02
 BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
 TEST_PERIOD_DAYS = 300
->>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
 SEQ_LEN = 5
 TRAIN_YEARS = 12
 TEST_PERIOD_DAYS = 60
@@ -304,8 +301,6 @@ def engineer_features(df):
     # 날짜 기준으로 오름차순 정렬
     df.sort_values('Date', inplace=True)
     return df
-
-<<<<<<< HEAD
 # ------------------- 시퀀스 생성 함수 -------------------
 def prepare_sequences(features, close_prices, target_percent):
     sequences, targets = [], []
@@ -313,7 +308,7 @@ def prepare_sequences(features, close_prices, target_percent):
     for i in range(max_i):
         window = features[i: i + SEQ_LEN]
         base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
-        future_price = close_prices[i + SEQ_LEN] # 오늘
+        future_price = close_prices[i + SEQ_LEN]   # 오늘
         if future_price >= base_price * (1 + target_percent):
             label = 0  # 상승
         elif future_price <= base_price * (1 - target_percent):
@@ -324,8 +319,7 @@ def prepare_sequences(features, close_prices, target_percent):
         targets.append(label)
     return np.array(sequences), np.array(targets)
 
-=======
->>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
+
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
     def __init__(self, input_size, hidden_size=32, dropout=0.3, drop_features=None, mask_scale=0.3):
@@ -362,24 +356,6 @@ class StockModel(nn.Module):
         out = self.global_dropout(out)
         out = self.fc2(out)
         return out
-
-# ------------------- 시퀀스 생성 함수 -------------------
-def prepare_sequences(features, close_prices):
-    sequences, targets = [], []
-    max_i = len(features) - SEQ_LEN 
-    for i in range(max_i):
-        window = features[i: i + SEQ_LEN]
-        base_price = close_prices[i + SEQ_LEN - 1] # 1일 전
-        future_price = close_prices[i + SEQ_LEN] # 오늘
-        if future_price >= base_price * (1 + TARGET_PERCENT):
-            label = 0  # 상승
-        elif future_price <= base_price * (1 - TARGET_PERCENT):
-            label = 1  # 하락
-        else:
-            continue
-        sequences.append(window)
-        targets.append(label)
-    return np.array(sequences), np.array(targets)
 
 # ------------------- 스케일링 -------------------
 def scale_features(df, scalers): 
@@ -833,7 +809,11 @@ def plot_score(stock_models, filename="backtest_matrix.png"):
     plt.close()
 
 # 오늘 매수후보 리스트 생성
+# ------------------- [predict] -------------------
 def predict(engine=None):
+    """
+    오늘 매수 후보 CSV를 생성하고 저장한다.
+    """
     today_date = pd.Timestamp.today().normalize()
     output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")  
 
@@ -871,64 +851,76 @@ def predict(engine=None):
 
             if prob[0] >= BUY_PROB_THRESHOLD:
                 buy_candidates.append({
-<<<<<<< HEAD
-                    'code': code,
-                    'prob_up': prob[0],
-                    'prob_down': prob[1],
+                    '종목코드': str(code).zfill(6),
+                    '상승확률': round(prob[0], 3),
+                    'prob_down': round(prob[1], 3),
                     'price': window['Close'].iloc[-1]
-=======
-                    '종목코드': code,
-                    '상승확률': round(prob[0], 3)   # 소수점 셋째 자리 반올림
->>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
                 })
 
-        except Exception:
+        except Exception as e:
+            print(f"❌ [predict] {code} 처리 중 오류: {e}")
             continue
 
-<<<<<<< HEAD
-    top_candidates = sorted(buy_candidates, key=lambda x: x['prob_up'], reverse=True)
-    return top_candidates[:TOP_N_FOR_BUY]
+    # ✅ 확률 기준 정렬 후 상위 TOP_N
+    top_candidates = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
+    top_candidates = top_candidates[:TOP_N_FOR_BUY]
 
-=======
-    # 확률 기준으로 정렬
-    buy_candidates_sorted = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
-
-    # CSV 저장 (후보가 없어도 헤더만 있는 파일 생성)
-    df_out = pd.DataFrame(buy_candidates_sorted, columns=['종목코드', '상승확률'])
+    # ✅ 항상 CSV 저장
+    df_out = pd.DataFrame(top_candidates)
     df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
+    print(f"📝 [predict] 매수 후보 CSV 저장 완료: {output_path} (총 {len(df_out)}건)")
 
-    return buy_candidates_sorted
-        
->>>>>>> 1d31ad8af5cfc4f5db126764ad863b1c6296f090
-# ------------------- 메인 -------------------
+    return top_candidates
+
+def get_today_candidates(engine=None):
+    """
+    ✅ buy_list.csv를 안전하게 읽어서 종목코드가 항상 문자열 6자리로 유지되도록 한다.
+    ✅ 매수제안 컬럼이 '매수'인 것만 필터링한다.
+    """
+    df = pd.read_csv(
+        "rule_2_결과/buy_list.csv",
+        dtype={'종목코드': str}   # ← 핵심! 종목코드를 문자열로 강제!
+    )
+    # 만약 buy_list.csv에 '매수제안' 컬럼이 있다면
+    if '매수제안' in df.columns:
+        df = df[df['매수제안'] == '매수']  # ✔️ '매수'만 추출
+
+    print(f"✅ [get_today_candidates] 불러온 후보 수: {len(df)}")
+    print(df[['종목코드', '상승확률']])  # 디버깅 출력
+    return df.to_dict(orient="records")
+# ------------------- [main] -------------------
 def main():
-    # 1) db 연결
     eng = get_engine()
-    # 2) 종목 리스트 로딩
+
+    # 종목 로딩, 데이터 전처리 등
     codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {STOCK_NUMBER}", eng)['Code'].tolist()
-    
-    # 3) 전체 종목 데이터 로딩 및 전처리 
     market_idx_df = load_market_index(eng)
     preproc_dfs = {}
     for code in codes:
         df_stock = load_stock_data(code, eng)
         df_full = df_stock.merge(market_idx_df, on='Date', how='left')
         preproc_dfs[code] = engineer_features(df_full)
-    
-    # 4) 백테스트 날짜 구간 설정
+
+    # 백테스트 구간
     dates_df = pd.read_sql(f"SELECT Date FROM stock_data WHERE Code='{codes[0]}' ORDER BY Date", eng, parse_dates=['Date'])
     start_idx = dates_df[dates_df['Date'] >= BACKTEST_START_DATE].index[0]
     test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
 
-    # 5) 백테스트 실행
+    # 백테스트
     stock_models, portfolio_values = run_backtest(preproc_dfs, test_dates)
 
-    # 6) 결과 저장
+    # 결과 저장
     plot_backtest_results(test_dates, portfolio_values)
     plot_score(stock_models)
     trade_log_csv(stock_models)
-    
-    print("백테스트 및 후처리 완료")
+
+    print("✅ 백테스트 및 후처리 완료!")
+
+    # ✅ 백테스트 후 실시간 후보 생성까지
+    print("\n🧠 실시간 매수 후보 예측 중...")
+    predict(eng)
+    print("✅ [main] buy_list.csv 최신화 완료!")
 
 if __name__ == '__main__':
+    print("⚡ rule_2.py 직접 실행됨: main() 시작!")
     main()

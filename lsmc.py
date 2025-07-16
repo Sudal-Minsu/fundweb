@@ -1,25 +1,33 @@
+import os
+import sys
+import time
+import json
 import keyring
 import requests
-import json
-import time
 import numpy as np
 import pandas as pd
-import sys
 from datetime import datetime
-from sklearn.neural_network import MLPRegressor
-from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
-from rule_2 import predict_today_candidates
 from pathlib import Path
-from sqlalchemy import create_engine
+import matplotlib.pyplot as plt
+from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
+from rule_2 import get_today_candidates  # ✅ 반드시 import
 
 # ───────────── 설정 ─────────────
-TOTAL_RISK_BUDGET = 1_000_000  # 종목당 최대 리스크 허용 금액
+OUTPUT_DIR = "rule_2_결과"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+TOTAL_RISK_BUDGET_ALL = 1_000_000
 app_key, app_secret = get_api_keys()
 url_base = "https://openapivts.koreainvestment.com:29443"
 
 # ───────────── 토큰 발급 ─────────────
-res = requests.post(f"{url_base}/oauth2/tokenP", headers={"content-type": "application/json"},
-                    data=json.dumps({"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}))
+res = requests.post(f"{url_base}/oauth2/tokenP",
+                    headers={"content-type": "application/json"},
+                    data=json.dumps({
+                        "grant_type": "client_credentials",
+                        "appkey": app_key,
+                        "appsecret": app_secret
+                    }))
 access_token = res.json().get("access_token", "")
 if not access_token:
     print("❌ 액세스 토큰 발급 실패:", res.json())
@@ -29,7 +37,11 @@ print(f"🔑 액세스 토큰: {access_token}\n")
 # ───────────── 공통 API 함수 ─────────────
 def get_hashkey(data):
     url = f"{url_base}/uapi/hashkey"
-    headers = {"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret}
+    headers = {
+        "Content-Type": "application/json",
+        "appKey": app_key,
+        "appSecret": app_secret
+    }
     res = requests.post(url, headers=headers, data=json.dumps(data))
     time.sleep(1.2)
     return res.json().get("HASH", "")
@@ -43,7 +55,10 @@ def get_current_price(stock_code):
         "appSecret": app_secret,
         "tr_id": "FHKST01010100"
     }
-    params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": stock_code}
+    params = {
+        "fid_cond_mrkt_div_code": "J",
+        "fid_input_iscd": stock_code
+    }
     res = requests.get(url, headers=headers, params=params)
     time.sleep(1.2)
     if res.status_code != 200 or 'output' not in res.json():
@@ -86,31 +101,22 @@ def simulate_future_prices(current_price, days=10, paths=100, past_returns=None)
             simulated_prices[i, j] = price
     return simulated_prices
 
-# ───────────── 기대수익+손익비+상승확률+최적수량 ─────────────
-def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price, total_risk_budget=1_000_000):
+def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
     prices = get_historical_prices_api(stock_code)
     if prices is None or len(prices) < 20:
         return {'expected_profit': 0, 'expected_loss': 0, 'rr_ratio': 0, 'optimal_qty': 0, 'prob_up': 0}
-
     returns = np.diff(np.log(prices))
     simulated = simulate_future_prices(current_price, past_returns=returns)
-
     max_profits = np.maximum(simulated.max(axis=1) - current_price, 0)
     max_losses = np.maximum(current_price - simulated.min(axis=1), 0)
-
     expected_profit = np.mean(max_profits)
     expected_loss = np.mean(max_losses)
     rr_ratio = expected_profit / expected_loss if expected_loss > 0 else 0
     prob_up = np.mean(max_profits > 0)
-
-    max_loss_allowed = total_risk_budget
-    optimal_qty = int(max_loss_allowed / expected_loss) if expected_loss > 0 else 0
-
     return {
         'expected_profit': expected_profit,
         'expected_loss': expected_loss,
         'rr_ratio': rr_ratio,
-        'optimal_qty': optimal_qty,
         'prob_up': prob_up
     }
 
@@ -140,7 +146,7 @@ def send_order(stock_code, price, qty, order_type="매수"):
     time.sleep(1.2)
     return res.json()
 
-# ───────────── 매매 로그 기록 ─────────────
+# ───────────── 로그 기록 ─────────────
 def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ratio, qty, order_type, order_result):
     log_file = Path("trade_log.csv")
     log_entry = {
@@ -155,34 +161,31 @@ def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ra
         "주문종류": order_type,
         "주문결과": order_result.get("msg1", "NO_RESPONSE")
     }
-
     if log_file.exists():
         df = pd.read_csv(log_file)
         df = pd.concat([df, pd.DataFrame([log_entry])], ignore_index=True)
     else:
         df = pd.DataFrame([log_entry])
-
     df.to_csv(log_file, index=False, encoding='utf-8-sig')
 
 # ───────────── 메인 실행 ─────────────
 if __name__ == "__main__":
-    engine = create_engine(
-        f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
-    )
+    print("📊 buy_list.csv에서 매수 후보 불러오는 중...")
+    top_candidates = get_today_candidates()
+    print(f"✅ 추출된 후보 수: {len(top_candidates)}")
+
+    loop_count = 1
+    portfolio = {}
+    portfolio_values = []  # ✅ 누적 가치 기록 리스트
 
     try:
-        print("📊 GRU 기반 매수 후보 추출 중...")
-        top_candidates = predict_today_candidates(engine)
-        print(f"✅ 추출된 후보 수: {len(top_candidates)}")
-
-        loop_count = 1
-        portfolio = {}
-
         while True:
             print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            results = []
+            rr_total = 0
 
-            for candidate in top_candidates[:3]:  # 디버깅용 상위 3개만
-                stock_code = candidate['code']
+            for candidate in top_candidates[:3]:
+                stock_code = candidate['종목코드']
                 print(f"🔍 종목 코드: {stock_code}")
 
                 price = get_current_price(stock_code)
@@ -190,58 +193,84 @@ if __name__ == "__main__":
                     print(f"❌ 현재가 조회 실패: {stock_code}")
                     continue
 
-                result = lsmc_expected_profit_and_risk_with_prob(stock_code, price, total_risk_budget=TOTAL_RISK_BUDGET)
+                result = lsmc_expected_profit_and_risk_with_prob(stock_code, price)
+                rr_total += result['rr_ratio']
+                result.update({'code': stock_code, 'price': price})
+                results.append(result)
 
-                print(f"💰 현재가: {price} | ProbUp: {result['prob_up']*100:.2f}% | 기대수익: {result['expected_profit']:.2f} | 손익비: {result['rr_ratio']:.2f} | 최적수량: {result['optimal_qty']}")
-
-                if stock_code not in portfolio:
-                    if result['optimal_qty'] > 0:
-                        order_result = send_order(stock_code, price, qty=result['optimal_qty'], order_type="매수")
-                        print(f"✅ 매수 요청 결과: {order_result}")
-
-                        log_trade(
-                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            stock_code=stock_code,
-                            price=price,
-                            prob_up=result['prob_up'],
-                            exp_profit=result['expected_profit'],
-                            exp_loss=result['expected_loss'],
-                            rr_ratio=result['rr_ratio'],
-                            qty=result['optimal_qty'],
-                            order_type="매수",
-                            order_result=order_result
-                        )
-
-                        if order_result.get("rt_cd") == "0":
-                            portfolio[stock_code] = {'buy_price': price, 'qty': result['optimal_qty']}
-                    else:
-                        print(f"🚫 조건 미충족으로 매수 보류: {stock_code}")
+            for result in results:
+                rr = result['rr_ratio']
+                if rr_total > 0 and rr > 0 and result['expected_loss'] > 0:
+                    max_loss_allowed = TOTAL_RISK_BUDGET_ALL * (rr / rr_total)
+                    result['optimal_qty'] = int(max_loss_allowed / result['expected_loss'])
                 else:
-                    buy_price = portfolio[stock_code]['buy_price']
-                    if result['expected_profit'] < 300 or price < buy_price * 0.98:
-                        order_result = send_order(stock_code, price, qty=portfolio[stock_code]['qty'], order_type="매도")
-                        print(f"✅ 매도 요청 결과: {order_result}")
+                    result['optimal_qty'] = 0
 
-                        log_trade(
-                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            stock_code=stock_code,
-                            price=price,
-                            prob_up=result['prob_up'],
-                            exp_profit=result['expected_profit'],
-                            exp_loss=result['expected_loss'],
-                            rr_ratio=result['rr_ratio'],
-                            qty=portfolio[stock_code]['qty'],
-                            order_type="매도",
-                            order_result=order_result
-                        )
+                print(f"📈 [{result['code']}] 가격:{result['price']} RR:{rr:.2f} Qty:{result['optimal_qty']}")
 
+            # ✅ 매매 로직 (수량 맞추기)
+            for result in results:
+                stock_code = result['code']
+                price = result['price']
+                optimal_qty = result['optimal_qty']
+                current_qty = portfolio.get(stock_code, {}).get('qty', 0)
+
+                if optimal_qty > current_qty:
+                    add_qty = optimal_qty - current_qty
+                    if add_qty > 0:
+                        order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
+                        print(f"✅ 추가 매수 요청 결과: {order_result}")
+                        log_trade(datetime.now(), stock_code, price, result['prob_up'],
+                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "매수", order_result)
                         if order_result.get("rt_cd") == "0":
-                            del portfolio[stock_code]
-                    else:
-                        print(f"🔒 보유 유지: {stock_code} | 현재가: {price} | 매입가: {buy_price}")
+                            if stock_code in portfolio:
+                                portfolio[stock_code]['qty'] += add_qty
+                            else:
+                                portfolio[stock_code] = {'buy_price': price, 'qty': add_qty}
+
+                elif optimal_qty < current_qty:
+                    sell_qty = current_qty - optimal_qty
+                    if sell_qty > 0:
+                        order_result = send_order(stock_code, price, qty=sell_qty, order_type="매도")
+                        print(f"✅ 부분 매도 요청 결과: {order_result}")
+                        log_trade(datetime.now(), stock_code, price, result['prob_up'],
+                                  result['expected_profit'], result['expected_loss'], rr, sell_qty, "매도", order_result)
+                        if order_result.get("rt_cd") == "0":
+                            portfolio[stock_code]['qty'] -= sell_qty
+                            if portfolio[stock_code]['qty'] <= 0:
+                                del portfolio[stock_code]
+                else:
+                    print(f"✅ [유지] {stock_code} 현재 수량 유지")
+
+            # ✅ 루프마다 평가금액 기록
+            total_value = 0
+            for stock_code, pos in portfolio.items():
+                shares = pos['qty']
+                if shares > 0:
+                    last_price = get_current_price(stock_code)
+                    total_value += shares * last_price
+            cash_value = 0  # 예시: 남은 현금은 따로 관리시 반영
+            total_value += cash_value
+            portfolio_values.append(total_value)
+            print(f"💰 [Loop {loop_count}] 평가금액: {total_value:,.0f}")
 
             loop_count += 1
-            time.sleep(15)
+            time.sleep(600)
 
     except KeyboardInterrupt:
-        print("⏹ 자동 매매 종료")
+        print("⏹️ 사용자 중단! 누적 수익률 그래프 저장 중...")
+
+    finally:
+        if portfolio_values:
+            plt.figure(figsize=(10, 6))
+            plt.plot(portfolio_values, label="누적 포트폴리오 가치")
+            plt.title("누적 수익률")
+            plt.xlabel("루프 횟수")
+            plt.ylabel("포트폴리오 가치")
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(OUTPUT_DIR, "누적수익률_그래프.png"), dpi=300)
+            print(f"✅ 누적 수익률 그래프 저장 완료 ({OUTPUT_DIR}/누적수익률_그래프.png)")
+        else:
+            print("❌ 저장할 데이터가 없습니다.")
