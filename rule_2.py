@@ -416,7 +416,7 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     print(f"Confusion matrix 저장 완료: {os.path.join(OUTPUT_DIR, filename)}")
     
 # 오늘 매수후보 리스트 생성
-def predict(engine=None):
+def predict_today_candidates(engine=None):
     today_date = pd.Timestamp.today().normalize()
     output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")  
 
