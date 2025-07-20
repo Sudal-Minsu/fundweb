@@ -62,7 +62,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
-
+    
 # ------------------- 피처 정의 -------------------
 STANDARD_COLS = [
     # 변화량
@@ -70,6 +70,7 @@ STANDARD_COLS = [
     'USD_KRW_RET',
     'KOSPI_RET',
     'KOSDAQ_RET',
+    'Momentum_3',
 ]
 
 MINMAX_COLS = [
@@ -82,8 +83,7 @@ MINMAX_COLS = [
     'TradingValue',
 ]
 
-CONTINUOUS_COLS = STANDARD_COLS + MINMAX_COLS 
-FEATURE_COLUMNS = CONTINUOUS_COLS
+FEATURE_COLUMNS = STANDARD_COLS + MINMAX_COLS
 
 # ------------------- DB & 데이터 로딩 -------------------
 def get_engine():
@@ -106,8 +106,8 @@ def load_market_index(engine):
 def engineer_features(df):
     df = df.sort_values('Date').reset_index(drop=True)
     # --- 기본 정리 ---
-    df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
     df['Close_RET'] = df['Close'].pct_change().fillna(0)
+    df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
     df['TradingValue'] = df['Close'] * df['Volume']
     
     # --- 거시 경제 변수 전처리 ---
@@ -115,6 +115,8 @@ def engineer_features(df):
     df['USD_KRW_RET'] = df['USD_KRW'].pct_change().fillna(0)
     df['KOSPI_RET'] = df['KOSPI'].pct_change().fillna(0)
     df['KOSDAQ_RET'] = df['KOSDAQ'].pct_change().fillna(0)
+    
+    df['Momentum_3'] = df['Close'] / df['Close'].shift(3) - 1
     
     # 결측값 제거
     df = df.replace([np.inf, -np.inf], np.nan)
