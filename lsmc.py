@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
 from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
-from rule_2 import get_today_candidates  # ✅ 반드시 import
 
 # ───────────── 설정 ─────────────
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-TOTAL_RISK_BUDGET_ALL = 1_000_000
+TOTAL_RISK_BUDGET_ALL = 5_000_000_00
+MAX_BUY_BUDGET = 10_000_000
 app_key, app_secret = get_api_keys()
 url_base = "https://openapivts.koreainvestment.com:29443"
 
@@ -121,9 +121,9 @@ def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
     }
 
 # ───────────── 주문 함수 ─────────────
-def send_order(stock_code, price, qty, order_type="매수"):
+def send_order(stock_code, price, qty, order_type="머수"):
     url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
-    tr_id = "VTTC0802U" if order_type == "매수" else "VTTC0801U"
+    tr_id = "VTTC0802U" if order_type == "머수" else "VTTC0801U"
     data = {
         "CANO": ACCOUNT_INFO["CANO"],
         "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
@@ -153,7 +153,7 @@ def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ra
         "거래시간": timestamp,
         "종목코드": stock_code,
         "현재가": price,
-        "상승확률(%)": round(prob_up * 100, 2),
+        "상증확률(%)": round(prob_up * 100, 2),
         "기대수익": round(exp_profit, 2),
         "예상손실": round(exp_loss, 2),
         "손익비": round(rr_ratio, 2),
@@ -170,13 +170,22 @@ def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ra
 
 # ───────────── 메인 실행 ─────────────
 if __name__ == "__main__":
-    print("📊 buy_list.csv에서 매수 후보 불러오는 중...")
-    top_candidates = get_today_candidates()
-    print(f"✅ 추출된 후보 수: {len(top_candidates)}")
+    print("📊 buy_list.csv에서 매수 호불 불러오는 중...")
+    buy_list_path = os.path.join(OUTPUT_DIR, "buy_list.csv")
+    if not os.path.exists(buy_list_path):
+        print("❌ buy_list.csv 파일이 존재하지 않습니다.")
+        sys.exit()
+
+    top_candidates = pd.read_csv(buy_list_path, dtype={'종목코드': str})
+    top_candidates = [
+        {**row, '종목코드': row['종목코드'].zfill(6)} for _, row in top_candidates.iterrows()
+    ]
+    current_buy_codes = set([c['종목코드'] for c in top_candidates])
+    print(f"✅ [get_today_candidates] 불러온 호불 수: {len(top_candidates)}")
 
     loop_count = 1
     portfolio = {}
-    portfolio_values = []  # ✅ 누적 가치 기록 리스트
+    portfolio_values = []
 
     try:
         while True:
@@ -184,15 +193,24 @@ if __name__ == "__main__":
             results = []
             rr_total = 0
 
+            # 비호불 종목 전략 매도
+            for stock_code in list(portfolio.keys()):
+                if stock_code not in current_buy_codes:
+                    shares = portfolio[stock_code]['qty']
+                    if shares > 0:
+                        last_price = get_current_price(stock_code)
+                        order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
+                        print(f"🔁 [비호불 종목 매도] {stock_code}: {shares}주 → {order_result}")
+                        log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, shares, "매도", order_result)
+                        del portfolio[stock_code]
+
             for candidate in top_candidates[:3]:
                 stock_code = candidate['종목코드']
                 print(f"🔍 종목 코드: {stock_code}")
-
                 price = get_current_price(stock_code)
                 if not price:
                     print(f"❌ 현재가 조회 실패: {stock_code}")
                     continue
-
                 result = lsmc_expected_profit_and_risk_with_prob(stock_code, price)
                 rr_total += result['rr_ratio']
                 result.update({'code': stock_code, 'price': price})
@@ -202,13 +220,15 @@ if __name__ == "__main__":
                 rr = result['rr_ratio']
                 if rr_total > 0 and rr > 0 and result['expected_loss'] > 0:
                     max_loss_allowed = TOTAL_RISK_BUDGET_ALL * (rr / rr_total)
-                    result['optimal_qty'] = int(max_loss_allowed / result['expected_loss'])
+                    if result['expected_loss'] < 100:
+                        result['expected_loss'] = 100
+                    qty_by_risk = max_loss_allowed / result['expected_loss']
+                    budget_limited_qty = MAX_BUY_BUDGET // result['price']
+                    result['optimal_qty'] = int(min(qty_by_risk, budget_limited_qty))
                 else:
                     result['optimal_qty'] = 0
-
                 print(f"📈 [{result['code']}] 가격:{result['price']} RR:{rr:.2f} Qty:{result['optimal_qty']}")
 
-            # ✅ 매매 로직 (수량 맞추기)
             for result in results:
                 stock_code = result['code']
                 price = result['price']
@@ -218,10 +238,10 @@ if __name__ == "__main__":
                 if optimal_qty > current_qty:
                     add_qty = optimal_qty - current_qty
                     if add_qty > 0:
-                        order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
+                        order_result = send_order(stock_code, price, qty=add_qty, order_type="머수")
                         print(f"✅ 추가 매수 요청 결과: {order_result}")
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "매수", order_result)
+                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "머수", order_result)
                         if order_result.get("rt_cd") == "0":
                             if stock_code in portfolio:
                                 portfolio[stock_code]['qty'] += add_qty
@@ -242,15 +262,12 @@ if __name__ == "__main__":
                 else:
                     print(f"✅ [유지] {stock_code} 현재 수량 유지")
 
-            # ✅ 루프마다 평가금액 기록
             total_value = 0
             for stock_code, pos in portfolio.items():
                 shares = pos['qty']
                 if shares > 0:
                     last_price = get_current_price(stock_code)
                     total_value += shares * last_price
-            cash_value = 0  # 예시: 남은 현금은 따로 관리시 반영
-            total_value += cash_value
             portfolio_values.append(total_value)
             print(f"💰 [Loop {loop_count}] 평가금액: {total_value:,.0f}")
 
@@ -263,10 +280,10 @@ if __name__ == "__main__":
     finally:
         if portfolio_values:
             plt.figure(figsize=(10, 6))
-            plt.plot(portfolio_values, label="누적 포트폴리오 가치")
+            plt.plot(portfolio_values, label="누적 포트폴리오 값")
             plt.title("누적 수익률")
-            plt.xlabel("루프 횟수")
-            plt.ylabel("포트폴리오 가치")
+            plt.xlabel("룰 회수")
+            plt.ylabel("포트폴리오 값")
             plt.grid(True)
             plt.legend()
             plt.tight_layout()
