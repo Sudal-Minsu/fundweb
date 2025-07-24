@@ -20,6 +20,24 @@ MAX_BUY_BUDGET = 10_000_000
 app_key, app_secret = get_api_keys()
 url_base = "https://openapivts.koreainvestment.com:29443"
 
+# ───────────── 호가단위 보정 함수 ─────────────
+def adjust_price_to_tick(price):
+    if price < 1000:
+        tick = 1
+    elif price < 5000:
+        tick = 5
+    elif price < 10000:
+        tick = 10
+    elif price < 50000:
+        tick = 50
+    elif price < 100000:
+        tick = 100
+    elif price < 500000:
+        tick = 500
+    else:
+        tick = 1000
+    return price - (price % tick)
+
 # ───────────── 토큰 발급 ─────────────
 res = requests.post(f"{url_base}/oauth2/tokenP",
                     headers={"content-type": "application/json"},
@@ -35,6 +53,31 @@ if not access_token:
 print(f"액세스 토큰: {access_token}\n")
 
 # ───────────── 공통 API 함수 ─────────────
+def get_historical_prices_api(stock_code, start_date="20220101", end_date="20240101"):
+    url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": f"Bearer {access_token}",
+        "appKey": app_key,
+        "appSecret": app_secret,
+        "tr_id": "FHKST01010400"
+    }
+    params = {
+        "fid_cond_mrkt_div_code": "J",
+        "fid_input_iscd": stock_code,
+        "fid_org_adj_prc": "0",
+        "fid_period_div_code": "D",
+        "fid_begin_date": start_date,
+        "fid_end_date": end_date
+    }
+    res = requests.get(url, headers=headers, params=params)
+    time.sleep(1.2)
+    if res.status_code != 200 or 'output' not in res.json():
+        return None
+    df = pd.DataFrame(res.json()['output'])
+    df = df[df['stck_clpr'] != '']
+    return df['stck_clpr'].astype(float).values[::-1]
+
 def get_hashkey(data):
     url = f"{url_base}/uapi/hashkey"
     headers = {
@@ -63,34 +106,69 @@ def get_current_price(stock_code):
     time.sleep(1.2)
     if res.status_code != 200 or 'output' not in res.json():
         return None
-    return int(res.json()['output']['stck_prpr'])
+    return adjust_price_to_tick(int(res.json()['output']['stck_prpr']))
 
-def get_historical_prices_api(stock_code, start_date="20220101", end_date="20240101"):
-    url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
+# ───────────── 주문 함수 ─────────────
+def send_order(stock_code, price, qty, order_type="매수"):
+    url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
+    tr_id = "VTTC0802U" if order_type == "매수" else "VTTC0801U"
+    adjusted_price = adjust_price_to_tick(price)
+    data = {
+        "CANO": ACCOUNT_INFO["CANO"],
+        "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
+        "PDNO": stock_code,
+        "ORD_DVSN": "00",
+        "ORD_QTY": str(qty),
+        "ORD_UNPR": str(adjusted_price)
+    }
+    hashkey = get_hashkey(data)
     headers = {
         "Content-Type": "application/json",
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
-        "tr_id": "FHKST01010400"
+        "tr_id": tr_id,
+        "hashkey": hashkey
     }
-    params = {
-        "fid_cond_mrkt_div_code": "J",
-        "fid_input_iscd": stock_code,
-        "fid_org_adj_prc": "0",
-        "fid_period_div_code": "D",
-        "fid_begin_date": start_date,
-        "fid_end_date": end_date
-    }
-    res = requests.get(url, headers=headers, params=params)
     time.sleep(1.2)
-    if res.status_code != 200 or 'output' not in res.json():
-        return None
-    df = pd.DataFrame(res.json()['output'])
-    df = df[df['stck_clpr'] != '']
-    return df['stck_clpr'].astype(float).values[::-1]
+    res = requests.post(url, headers=headers, data=json.dumps(data))
+    time.sleep(1.2)
+    return res.json()
 
-# ───────────── LSMC 시뮬 함수 ─────────────
+# ───────────── 포트폴리오 관리 ─────────────
+def load_portfolio():
+    path = Path("portfolio.json")
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_portfolio(data):
+    with open("portfolio.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ───────────── 비후보 종목 매도 & 잔고 없는 경우 강제 삭제 ─────────────
+def wait_until_all_non_candidate_sold(portfolio, current_buy_codes):
+    has_non_candidates = True
+    while has_non_candidates:
+        has_non_candidates = False
+        for stock_code in list(portfolio.keys()):
+            if stock_code not in current_buy_codes:
+                shares = portfolio[stock_code]['qty']
+                if shares > 0:
+                    last_price = get_current_price(stock_code)
+                    order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
+                    print(f"🔁 [비호불 종목 매도] {stock_code}: {shares}주 → {order_result}")
+                    log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, shares, "매도", order_result)
+                    # 무조건 포트폴리오에서 삭제
+                    if order_result.get("rt_cd") == "0" or order_result.get("msg_cd") == "40240000":
+                        del portfolio[stock_code]
+                        has_non_candidates = True
+        if has_non_candidates:
+            print("비후보 종목 매도 체결 대기중... 10초 대기")
+            time.sleep(10)
+
+# ───────────── LSMC 시뮬레이션 ─────────────
 def simulate_future_prices(current_price, days=10, paths=100, past_returns=None):
     simulated_prices = np.zeros((paths, days))
     for i in range(paths):
@@ -120,32 +198,6 @@ def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
         'prob_up': prob_up
     }
 
-# ───────────── 주문 함수 ─────────────
-def send_order(stock_code, price, qty, order_type="머수"):
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
-    tr_id = "VTTC0802U" if order_type == "머수" else "VTTC0801U"
-    data = {
-        "CANO": ACCOUNT_INFO["CANO"],
-        "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
-        "PDNO": stock_code,
-        "ORD_DVSN": "00",
-        "ORD_QTY": str(qty),
-        "ORD_UNPR": str(price)
-    }
-    hashkey = get_hashkey(data)
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key,
-        "appSecret": app_secret,
-        "tr_id": tr_id,
-        "hashkey": hashkey
-    }
-    time.sleep(1.2)
-    res = requests.post(url, headers=headers, data=json.dumps(data))
-    time.sleep(1.2)
-    return res.json()
-
 # ───────────── 로그 기록 ─────────────
 def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ratio, qty, order_type, order_result):
     log_file = Path("trade_log.csv")
@@ -170,7 +222,7 @@ def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ra
 
 # ───────────── 메인 실행 ─────────────
 if __name__ == "__main__":
-    print("buy_list.csv에서 매수 호불 불러오는 중...")
+    print("📊 buy_list.csv에서 매수 후보 불러오는 중...")
     buy_list_path = os.path.join(OUTPUT_DIR, "buy_list.csv")
     if not os.path.exists(buy_list_path):
         print("❌ buy_list.csv 파일이 존재하지 않습니다.")
@@ -181,10 +233,10 @@ if __name__ == "__main__":
         {**row, '종목코드': row['종목코드'].zfill(6)} for _, row in top_candidates.iterrows()
     ]
     current_buy_codes = set([c['종목코드'] for c in top_candidates])
-    print(f"[get_today_candidates] 불러온 호불 수: {len(top_candidates)}")
+    print(f"✅ [get_today_candidates] 불러온 후보 수: {len(top_candidates)}")
 
     loop_count = 1
-    portfolio = {}
+    portfolio = load_portfolio() if Path("portfolio.json").exists() else {}
     portfolio_values = []
 
     try:
@@ -193,16 +245,9 @@ if __name__ == "__main__":
             results = []
             rr_total = 0
 
-            # 비호불 종목 전략 매도
-            for stock_code in list(portfolio.keys()):
-                if stock_code not in current_buy_codes:
-                    shares = portfolio[stock_code]['qty']
-                    if shares > 0:
-                        last_price = get_current_price(stock_code)
-                        order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
-                        print(f"[비호불 종목 매도] {stock_code}: {shares}주 → {order_result}")
-                        log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, shares, "매도", order_result)
-                        del portfolio[stock_code]
+            # 비후보 종목 전략 매도 (잔고없음도 강제 삭제)
+            wait_until_all_non_candidate_sold(portfolio, current_buy_codes)
+            save_portfolio(portfolio)
 
             for candidate in top_candidates[:3]:
                 stock_code = candidate['종목코드']
@@ -238,10 +283,10 @@ if __name__ == "__main__":
                 if optimal_qty > current_qty:
                     add_qty = optimal_qty - current_qty
                     if add_qty > 0:
-                        order_result = send_order(stock_code, price, qty=add_qty, order_type="머수")
-                        print(f"추가 매수 요청 결과: {order_result}")
+                        order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
+                        print(f"✅ 추가 매수 요청 결과: {order_result}")
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "머수", order_result)
+                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "매수", order_result)
                         if order_result.get("rt_cd") == "0":
                             if stock_code in portfolio:
                                 portfolio[stock_code]['qty'] += add_qty
@@ -261,6 +306,8 @@ if __name__ == "__main__":
                                 del portfolio[stock_code]
                 else:
                     print(f"[유지] {stock_code} 현재 수량 유지")
+
+            save_portfolio(portfolio)
 
             total_value = 0
             for stock_code, pos in portfolio.items():
