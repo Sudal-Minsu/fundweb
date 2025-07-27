@@ -18,14 +18,14 @@ from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
-BACKTEST_START_DATE = pd.to_datetime("2024-07-11")
+BACKTEST_START_DATE = pd.to_datetime("2024-07-01")
 TEST_PERIOD_DAYS = 300
 SEQ_LEN = 5
 BATCH_SIZE = 32
 LEARNING_RATE = 0.0005
 EPOCHS = 20
 VAL_LOSS_THRESHOLD = 0.693
-PERCENT = 5   
+PERCENT = 5
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
@@ -67,20 +67,17 @@ if torch.cuda.is_available():
 STANDARD_COLS = [
     # 변화량
     'Close_RET',
-    'USD_KRW_RET',
     'KOSPI_RET',
     'KOSDAQ_RET',
-    'Momentum_3',
 ]
 
 MINMAX_COLS = [
     # 기본값
-    'Close',
+    'Close', 
     'Open',
     'High',
     'Low',
     'Volume',
-    'TradingValue',
 ]
 
 FEATURE_COLUMNS = STANDARD_COLS + MINMAX_COLS
@@ -108,15 +105,12 @@ def engineer_features(df):
     # --- 기본 정리 ---
     df['Close_RET'] = df['Close'].pct_change().fillna(0)
     df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
-    df['TradingValue'] = df['Close'] * df['Volume']
     
     # --- 거시 경제 변수 전처리 ---
-    df[['KOSPI','KOSDAQ','USD_KRW','US_RATE']] = df[['KOSPI','KOSDAQ','USD_KRW','US_RATE']].ffill().fillna(0)
+    df[['KOSPI','KOSDAQ','USD_KRW']] = df[['KOSPI','KOSDAQ','USD_KRW']].ffill().fillna(0)
     df['USD_KRW_RET'] = df['USD_KRW'].pct_change().fillna(0)
     df['KOSPI_RET'] = df['KOSPI'].pct_change().fillna(0)
     df['KOSDAQ_RET'] = df['KOSDAQ'].pct_change().fillna(0)
-    
-    df['Momentum_3'] = df['Close'] / df['Close'].shift(3) - 1
     
     # 결측값 제거
     df = df.replace([np.inf, -np.inf], np.nan)
