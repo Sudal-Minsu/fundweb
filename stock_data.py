@@ -7,86 +7,126 @@ from tqdm import tqdm
 import time
 import FinanceDataReader as fdr
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
 import config
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
-start_date = today - datetime.timedelta(days=365 * 12)
+start_date = today - datetime.timedelta(days=365 * 12)  
 
 """ MySQL DB 연결 함수 """
 def get_connection():
     return pymysql.connect(**config.DB_CONFIG)
-           
-""" [1] 네이버 테마별 종목코드 최대 n개까지 크롤링 """
-def get_codes_from_theme(theme_url):
-    res = requests.get(theme_url, headers={'User-Agent': 'Mozilla/5.0'})
-    soup = BeautifulSoup(res.text, 'html.parser')
-    codes = []
-    for a in soup.select('td.name > div.name_area > a'):
-        href = a.get('href', '')
-        if '/item/main.naver?code=' in href:
-            code = href.split('code=')[-1]
-            codes.append(code)
-    return codes
 
-def get_top_theme_codes(n=400):
-    url = "https://finance.naver.com/sise/theme.naver"
-    res = requests.get(url, headers={'User-Agent':'Mozilla/5.0'})
+# 네이버 금융에서 사용할 필드 IDs 동적 추출 함수
+def fetch_field_ids(market_type):
+    # 첫 페이지 GET
+    url = f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page=1'
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    res = requests.get(url, headers=headers)
     soup = BeautifulSoup(res.text, 'html.parser')
-    theme_urls = []
-    for a in soup.select('td.col_type1 > a'):
-        href = a.get('href', '')
-        if href.startswith('/sise/sise_group_detail.naver?type=theme'):
-            theme_urls.append("https://finance.naver.com" + href)
-    result = []
-    used = set()
-    for idx, theme_url in enumerate(theme_urls):
-        try:
-            codes = get_codes_from_theme(theme_url)
-            for code in codes:
-                if code not in used:
-                    result.append(code)
-                    used.add(code)
-                    if len(result) >= n:
-                        return result
-            time.sleep(0.2)
-        except Exception as e:
-            pass
-    return result
+    subcnt = soup.select_one('div.subcnt_sise_item_top')
+    field_ids = [ipt['value'] for ipt in subcnt.select('input[name=fieldIds]')]
+    return field_ids
 
-""" [2] 상위 200개 종목 코드 (테마 + FDR 필터 적용) """
+# 각 페이지에서 POST 요청으로 데이터를 가져오는 함수
+def fetch_market_page(market_type, page, field_ids):
+    data = {
+        'menu': 'market_sum',
+        'fieldIds': field_ids,
+        'returnUrl': f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page={page}'
+    }
+    res = requests.post('https://finance.naver.com/sise/field_submit.nhn', data=data)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    table = soup.select_one('table.type_2')
+    html_str = str(table)
+    df = pd.read_html(StringIO(html_str), flavor='bs4')[0]
+    df = df.dropna(how='all')
+    # 종목코드 추출
+    codes = [a['href'].split('=')[-1] for a in soup.select('table.type_2 a.tltle')]
+    df = df.iloc[:len(codes)]
+    df['종목코드'] = codes
+    return df
+
+# 유니버스 추출 함수
 def get_top_200_codes():
-    all_theme_codes = get_top_theme_codes(n=400)
+    all_markets = []
+    for market_type in [0, 1]:  # 0: KOSPI, 1: KOSDAQ
+        # 동적 필드 추출 및 페이지 수 확인
+        field_ids = fetch_field_ids(market_type)
+        # 전체 페이지 수
+        first_page = requests.get(
+            f'https://finance.naver.com/sise/sise_market_sum.nhn?sosok={market_type}&page=1',
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        first_soup = BeautifulSoup(first_page.text, 'html.parser')
+        pgRR = first_soup.select_one('td.pgRR > a')
+        total_pages = int(pgRR['href'].split('=')[-1])
+
+        # 병렬 없이 진행 (필요시 ThreadPoolExecutor 적용)
+        market_data = []
+        for page in tqdm(range(1, total_pages + 1), desc=f"{'코스피' if market_type==0 else '코스닥'} 크롤링"):
+            try:
+                df_page = fetch_market_page(market_type, page, field_ids)
+                market_data.append(df_page)
+                time.sleep(0.2)
+            except Exception:
+                continue
+        df_market = pd.concat(market_data, ignore_index=True)
+        df_market['시장'] = '코스피' if market_type==0 else '코스닥'
+        all_markets.append(df_market)
+
+    df = pd.concat(all_markets, ignore_index=True)
+
+    # 관심 필드: 영업이익증가율
+    cols = ['영업이익증가율']
+    # 대체 결측값 처리
+    df.replace({'-': None, ',': ''}, regex=True, inplace=True)
+    df = df.dropna(subset=cols + ['종목코드'])
+
+    for c in cols:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df = df.dropna(subset=cols)
+    # 양수만
+    df = df[(df['영업이익증가율']>0)]
+
+    # 랭킹
+    df['op_inc_growth_rank'] = df['영업이익증가율'].rank(ascending=False)
+
+    # 가중합
+    df['weighted_score'] = df['op_inc_growth_rank']
+
+    # 상위 300개 후보
+    top_pool = df.sort_values('weighted_score').drop_duplicates('종목코드').head(500)
+    top_codes = top_pool['종목코드'].tolist()
+
+    # FDR 필터링
     valid = []
-    for code in tqdm(all_theme_codes, desc="FDR 필터링"):
+    for code in tqdm(top_codes, desc="FDR 필터링"):
         try:
             hist = fdr.DataReader(code, start_date, today)
-            if hist.empty or len(hist) < 2800 or 'Volume' not in hist.columns:
-                continue
-            recent = hist.tail(100)
-            low_vol = recent['Volume'].isna().sum() + (recent['Volume'] <= 1).sum()
-            if low_vol <= 50:
-                first_date = hist.index.min().date()
-                valid.append((code, first_date))
+            first_date = hist.index.min().date()
+            if len(hist) >= 2800:
+                recent = hist.tail(100)
+                low_vol = recent['Volume'].isna().sum() + (recent['Volume']<=1).sum()
+                if low_vol <= 50:
+                    valid.append((code, first_date))
         except:
             continue
-
     if not valid:
         print("[경고] 조건 만족 종목 없음.")
         return []
-
-    # 날짜 기준으로 가장 오래된 날짜을 뽑아서
     base_date = min(d for _, d in valid)
-    final = [c for c, d in valid if d <= base_date]
-    # 가장 먼저 valid에 들어온 순으로 200개
+    final = [c for c,d in valid if d <= base_date]
     return final[:200]
 
-""" [3] 종목 데이터 저장 """
+
+""" 종목의 데이터 저장 """
 def process_stock(code):
     try:
         df = fdr.DataReader(code, start_date, today)
         df.reset_index(inplace=True)
-        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']]
+        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']] 
         df['Code'] = code
 
         conn = get_connection()
@@ -110,25 +150,33 @@ def process_stock(code):
         conn.commit()
         cursor.close()
         conn.close()
+
     except Exception as e:
         print(f"[{code}] 처리 중 오류: {e}")
 
-""" [4] 시장 지수 """
+
+""" 시장 지수 """
 def update_market_indices():
     index_map = {
         'KOSPI': '^KS11',
         'KOSDAQ': '^KQ11'
     }
+
     print("[지수 수집 시작] KOSPI / KOSDAQ")
+
     for name, ticker in index_map.items():
         try:
             df = fdr.DataReader(ticker, start_date, today)
+
             df = df.rename_axis("Date").reset_index()
             df = df[['Date', 'Close']]
             df['IndexType'] = name
+            
             df = df.dropna(subset=['Date', 'Close'])
+
             conn = get_connection()
             cursor = conn.cursor()
+
             for _, row in df.iterrows():
                 date_str = row['Date'].strftime('%Y-%m-%d')
                 close_price = row['Close']
@@ -138,14 +186,17 @@ def update_market_indices():
                     VALUES (%s, %s, %s)
                     ON DUPLICATE KEY UPDATE Close = VALUES(Close)
                 """, (date_str, index_type, close_price))
+
             conn.commit()
             cursor.close()
             conn.close()
             print(f"[{name}] 저장 완료: {len(df)}개")
+
         except Exception as e:
             print(f"[{name}] 오류 발생: {e}")
 
-""" [5] 환율 저장 """
+
+""" 환율 저장 """
 def save_macro_data():
     df_fx = fdr.DataReader("USD/KRW", start_date, today)[['Close']]
     df_fx.rename(columns={'Close': 'USD_KRW'}, inplace=True)
@@ -166,21 +217,23 @@ def save_macro_data():
     cursor.close()
     conn.close()
     print("[완료] 환율 저장 완료")
+    
 
-""" [6] 메인 실행: 상위 200개 종목의 데이터 업데이트 """
+""" 상위 200개 종목의 데이터 업데이트 """
 def run_stock_data():
     conn = get_connection()
     cursor = conn.cursor()
+
     # 이전 데이터 삭제
     cutoff_date = today - datetime.timedelta(days=365 * 12)
     cursor.execute("DELETE FROM stock_data WHERE Date < %s", (cutoff_date,))
     conn.commit()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
-    # 상위 200개 종목 추출 (테마 기반)
+
+    # 상위 200개 종목 추출 
     top_200_codes = get_top_200_codes()
-    if not top_200_codes:
-        print("저장할 종목이 없습니다.")
-        return
+
+    # 추출한 종목코드들을 %s, %s, %s, ... 형태로 변환
     format_strings = ','.join(['%s'] * len(top_200_codes))
     cursor.execute(f"""
         DELETE FROM stock_data 
@@ -190,17 +243,27 @@ def run_stock_data():
     cursor.close()
     conn.close()
     print(f"[기존 종목 정리 완료] 상위 200개 외 종목 삭제")
+
     print(f"[처리 시작] 상위 {len(top_200_codes)}개 종목의 데이터 업데이트 중...")
 
+    # 동시에 최대 8개의 작업(process_stock(code)을 실행
+    # submit: 비동기 작업
     with ThreadPoolExecutor(max_workers=8) as executor:
+        # future 리스트에 저장
         futures = [executor.submit(process_stock, code) for code in top_200_codes]
+        # as_completed(futures): 각 future가 완료되는 순서대로 반환
         for _ in tqdm(as_completed(futures), total=len(futures), desc="종목 저장 진행 중", ncols=100):
+            # 진행률만 표시
             pass
+
     print("전체 데이터 저장 완료")
+
     print("지수 저장 시작")
-    update_market_indices()
+    update_market_indices()  
+    
     print("거시지표 저장 시작")
     save_macro_data()
+
     # 최종 종목 수 확인
     conn = get_connection()
     cursor = conn.cursor()
@@ -209,6 +272,7 @@ def run_stock_data():
     print(f"실제 저장된 종목 수: {count}개")
     cursor.close()
     conn.close()
+
 
 """ 메인 함수 실행 """
 if __name__ == "__main__":

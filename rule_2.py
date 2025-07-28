@@ -108,10 +108,10 @@ def engineer_features(df):
     
     # --- 거시 경제 변수 전처리 ---
     df[['KOSPI','KOSDAQ','USD_KRW']] = df[['KOSPI','KOSDAQ','USD_KRW']].ffill().fillna(0)
-    df['USD_KRW_RET'] = df['USD_KRW'].pct_change().fillna(0)
     df['KOSPI_RET'] = df['KOSPI'].pct_change().fillna(0)
     df['KOSDAQ_RET'] = df['KOSDAQ'].pct_change().fillna(0)
-    
+
+
     # 결측값 제거
     df = df.replace([np.inf, -np.inf], np.nan)
     df.dropna(subset=FEATURE_COLUMNS, inplace=True)
