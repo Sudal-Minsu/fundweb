@@ -2,8 +2,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import io
 
-log_text = """
-매매일자	주문번호	매매구분	종목코드	종목명	수량	체결가격
+# 로그 텍스트 입력 (그대로 복사/붙여넣기)
+log_text = """매매일자	주문번호	매매구분	종목코드	종목명	수량	체결가격
 07/24	2720	매도	000660	SK하이닉스	36	270,514
 07/24	2719	매도	082740	한화엔진	313	31,750
 07/24	2611	매도	000660	SK하이닉스	1	275,500
@@ -68,42 +68,47 @@ log_text = """
 07/16	7041	매도	014830	유니드	7	88,200
 07/16	6973	매수	034950	한국기업평가	146	100,199
 07/16	6971	매수	090430	아모레퍼시픽	41	135,500
-07/16	6970	매수	014830	유니드	48	88,473
-""".strip()
+07/16	6970	매수	014830	유니드	48	88,473"""
 
-# 1️⃣ 데이터프레임 변환 (동일)
-df = pd.read_csv(io.StringIO(log_text), sep='\t')
-df.columns = [c.strip() for c in df.columns]
-
+# 1) 데이터프레임 변환
+df = pd.read_csv(io.StringIO(log_text.strip()), sep='\t')
+df['수량'] = df['수량'].astype(str).str.replace(',', '').astype(int)
 df['날짜'] = '2025-' + df['매매일자'].str.replace('/', '-')
-df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+df['날짜'] = pd.to_datetime(df['날짜'])
 
-df['수량'] = df['수량'].astype(str).str.replace(',', '').astype(float)
-df['체결가격'] = df['체결가격'].astype(str).str.replace(',', '').astype(float)
-df['매매금액'] = df['수량'] * df['체결가격']
-df['잔고변화'] = df.apply(lambda x: -x['매매금액'] if x['매매구분'] == '매수' else x['매매금액'], axis=1)
+# 2) 종목별, 일자별로 수량 변화 계산
+df['수량변동'] = df.apply(lambda x: x['수량'] if x['매매구분'] == '매수' else -x['수량'], axis=1)
+date_range = pd.date_range(df['날짜'].min(), df['날짜'].max())
+종목리스트 = df['종목명'].unique()
 
-df = df.sort_values('날짜')
+잔고_시계열 = {stock:[] for stock in 종목리스트}
+잔고_현황 = {stock:0 for stock in 종목리스트}
 
-# 2️⃣ 종목별 누적 수익 계산
-cum_profit_by_stock = df.groupby(['날짜', '종목명'])['잔고변화'].sum().groupby('종목명').cumsum().reset_index()
-cum_profit_by_stock['잔고변화'] = cum_profit_by_stock['잔고변화'].astype(float)
+잔고_전체 = {'날짜': []}
+for stock in 종목리스트:
+    잔고_전체[stock] = []
 
-# 3️⃣ 폰트 및 Y축 표기 설정 (한글/지수 표기 해제)
+for date in date_range:
+    당일 = df[df['날짜'] == date]
+    for _, row in 당일.iterrows():
+        잔고_현황[row['종목명']] += row['수량변동']
+    잔고_전체['날짜'].append(date)
+    for stock in 종목리스트:
+        잔고_전체[stock].append(잔고_현황[stock])
+
+잔고_df = pd.DataFrame(잔고_전체)
+잔고_df.set_index('날짜', inplace=True)
+
+# 3) 그래프
+import matplotlib.font_manager as fm
 plt.rcParams['font.family'] = 'Malgun Gothic'
-plt.rcParams['axes.unicode_minus'] = False
-
-# 4️⃣ 종목별 누적 수익금 그래프 (실제 금액 표기)
-plt.figure(figsize=(14, 7))
-for stock in df['종목명'].unique():
-    stock_data = cum_profit_by_stock[cum_profit_by_stock['종목명'] == stock]
-    plt.plot(stock_data['날짜'], stock_data['잔고변화'], label=stock, marker='o')
-
+plt.figure(figsize=(14,7))
+for stock in 종목리스트:
+    plt.plot(잔고_df.index, 잔고_df[stock], marker='o', label=stock)
 plt.xlabel('일자')
-plt.ylabel('종목별 누적 수익금 (원)')
-plt.title('종목별 누적 수익금 그래프')
+plt.ylabel('보유수량')
+plt.title('종목별 보유수량(잔고) 변화')
 plt.legend()
 plt.grid()
-plt.ticklabel_format(style='plain', axis='y')   # <- 실제 금액(지수표기 해제)
 plt.tight_layout()
 plt.show()

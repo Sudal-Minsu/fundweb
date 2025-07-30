@@ -11,11 +11,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
 
-
-
-
-
-
 # ───────────── 설정 ─────────────
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -113,6 +108,36 @@ def get_current_price(stock_code):
         return None
     return adjust_price_to_tick(int(res.json()['output']['stck_prpr']))
 
+# ───────────── 실제 계좌 보유수량 조회 함수 ─────────────
+def get_real_balance_qty(stock_code):
+    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": f"Bearer {access_token}",
+        "appKey": app_key,
+        "appSecret": app_secret,
+        "tr_id": "VTTC8434R",  # 모의투자 TR_ID
+    }
+    params = {
+        "CANO": ACCOUNT_INFO["CANO"],
+        "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
+        "AFHR_FLPR_YN": "N",
+        "OFL_YN": "",
+        "INQR_DVSN": "02",
+        "UNPR_DVSN": "01",
+        "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N",
+        "PRCS_DVSN": "01"
+    }
+    res = requests.get(url, headers=headers, params=params)
+    time.sleep(1.2)
+    if res.status_code != 200 or 'output1' not in res.json():
+        return 0
+    for item in res.json()['output1']:
+        if item['pdno'] == stock_code:
+            return int(item['hldg_qty'])
+    return 0
+
 # ───────────── 주문 함수 ─────────────
 def send_order(stock_code, price, qty, order_type="매수"):
     url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
@@ -159,16 +184,21 @@ def wait_until_all_non_candidate_sold(portfolio, current_buy_codes):
         has_non_candidates = False
         for stock_code in list(portfolio.keys()):
             if stock_code not in current_buy_codes:
-                shares = portfolio[stock_code]['qty']
-                if shares > 0:
+                # ✅ 실제 계좌 잔고 기반으로 보유수량 조회
+                real_shares = get_real_balance_qty(stock_code)
+                if real_shares > 0:
                     last_price = get_current_price(stock_code)
-                    order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
-                    print(f"🔁 [비호불 종목 매도] {stock_code}: {shares}주 → {order_result}")
-                    log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, shares, "매도", order_result)
-                    # 무조건 포트폴리오에서 삭제
+                    order_result = send_order(stock_code, last_price, qty=real_shares, order_type="매도")
+                    print(f"🔁 [비후보 종목 매도] {stock_code}: {real_shares}주 → {order_result}")
+                    log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, real_shares, "매도", order_result)
+                    # 성공 시 포트폴리오에서 삭제
                     if order_result.get("rt_cd") == "0" or order_result.get("msg_cd") == "40240000":
                         del portfolio[stock_code]
                         has_non_candidates = True
+                else:
+                    # 실제로 더 이상 잔고가 없으면 포트폴리오에서도 삭제
+                    del portfolio[stock_code]
+                    has_non_candidates = True
         if has_non_candidates:
             print("비후보 종목 매도 체결 대기중... 10초 대기")
             time.sleep(10)
