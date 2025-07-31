@@ -361,6 +361,9 @@ if __name__ == "__main__":
 
     finally:
         if portfolio_values:
+            plt.rcParams['font.family'] = 'Malgun Gothic'  # 한글 폰트 설정 (윈도우)
+            plt.rcParams['axes.unicode_minus'] = False     # 마이너스 부호 깨짐 방지
+
             plt.figure(figsize=(10, 6))
             plt.plot(portfolio_values, label="누적 포트폴리오 값")
             plt.title("누적 수익률")
