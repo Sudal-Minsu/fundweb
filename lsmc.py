@@ -49,9 +49,9 @@ res = requests.post(f"{url_base}/oauth2/tokenP",
                     }))
 access_token = res.json().get("access_token", "")
 if not access_token:
-    print("❌ 액세스 토큰 발급 실패:", res.json())
+    print("❌ 액세스 토큰 발급 실패:", res.json(), flush=True)
     sys.exit()
-print(f"액세스 토큰: {access_token}\n")
+print(f"액세스 토큰: {access_token}\n", flush=True)
 
 # ───────────── 공통 API 함수 ─────────────
 def get_historical_prices_api(stock_code, start_date="20220101", end_date="20240101"):
@@ -190,7 +190,7 @@ def wait_until_all_non_candidate_sold(portfolio, current_buy_codes):
                 if real_shares > 0:
                     last_price = get_current_price(stock_code)
                     order_result = send_order(stock_code, last_price, qty=real_shares, order_type="매도")
-                    print(f"🔁 [비후보 종목 매도] {stock_code}: {real_shares}주 → {order_result}")
+                    print(f"🔁 [비후보 종목 매도] {stock_code}: {real_shares}주 → {order_result}", flush=True)
                     log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, real_shares, "매도", order_result)
                     # 성공 시 포트폴리오에서 삭제
                     if order_result.get("rt_cd") == "0" or order_result.get("msg_cd") == "40240000":
@@ -201,7 +201,7 @@ def wait_until_all_non_candidate_sold(portfolio, current_buy_codes):
                     del portfolio[stock_code]
                     has_non_candidates = True
         if has_non_candidates:
-            print("비후보 종목 매도 체결 대기중... 10초 대기")
+            print("비후보 종목 매도 체결 대기중... 10초 대기", flush=True)
             time.sleep(10)
 
 # ───────────── LSMC 시뮬레이션 ─────────────
@@ -258,10 +258,10 @@ def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ra
 
 # ───────────── 메인 실행 ─────────────
 if __name__ == "__main__":
-    print("📊 buy_list.csv에서 매수 후보 불러오는 중...")
+    print("📊 buy_list.csv에서 매수 후보 불러오는 중...", flush=True)
     buy_list_path = os.path.join(OUTPUT_DIR, "buy_list.csv")
     if not os.path.exists(buy_list_path):
-        print("❌ buy_list.csv 파일이 존재하지 않습니다.")
+        print("❌ buy_list.csv 파일이 존재하지 않습니다.", flush=True)
         sys.exit()
 
     top_candidates = pd.read_csv(buy_list_path, dtype={'종목코드': str})
@@ -269,7 +269,7 @@ if __name__ == "__main__":
         {**row, '종목코드': row['종목코드'].zfill(6)} for _, row in top_candidates.iterrows()
     ]
     current_buy_codes = set([c['종목코드'] for c in top_candidates])
-    print(f"✅ [get_today_candidates] 불러온 후보 수: {len(top_candidates)}")
+    print(f"✅ [get_today_candidates] 불러온 후보 수: {len(top_candidates)}", flush=True)
 
     loop_count = 1
     portfolio = load_portfolio() if Path("portfolio.json").exists() else {}
@@ -277,7 +277,7 @@ if __name__ == "__main__":
 
     try:
         while True:
-            print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
             results = []
             rr_total = 0
 
@@ -287,10 +287,10 @@ if __name__ == "__main__":
 
             for candidate in top_candidates[:3]:
                 stock_code = candidate['종목코드']
-                print(f"종목 코드: {stock_code}")
+                print(f"종목 코드: {stock_code}", flush=True)
                 price = get_current_price(stock_code)
                 if not price:
-                    print(f"❌ 현재가 조회 실패: {stock_code}")
+                    print(f"❌ 현재가 조회 실패: {stock_code}", flush=True)
                     continue
                 result = lsmc_expected_profit_and_risk_with_prob(stock_code, price)
                 rr_total += result['rr_ratio']
@@ -308,7 +308,7 @@ if __name__ == "__main__":
                     result['optimal_qty'] = int(min(qty_by_risk, budget_limited_qty))
                 else:
                     result['optimal_qty'] = 0
-                print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} Qty:{result['optimal_qty']}")
+                print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} Qty:{result['optimal_qty']}", flush=True)
 
             for result in results:
                 stock_code = result['code']
@@ -320,7 +320,7 @@ if __name__ == "__main__":
                     add_qty = optimal_qty - current_qty
                     if add_qty > 0:
                         order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
-                        print(f"✅ 추가 매수 요청 결과: {order_result}")
+                        print(f"✅ 추가 매수 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
                                   result['expected_profit'], result['expected_loss'], rr, add_qty, "매수", order_result)
                         if order_result.get("rt_cd") == "0":
@@ -333,7 +333,7 @@ if __name__ == "__main__":
                     sell_qty = current_qty - optimal_qty
                     if sell_qty > 0:
                         order_result = send_order(stock_code, price, qty=sell_qty, order_type="매도")
-                        print(f"부분 매도 요청 결과: {order_result}")
+                        print(f"부분 매도 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
                                   result['expected_profit'], result['expected_loss'], rr, sell_qty, "매도", order_result)
                         if order_result.get("rt_cd") == "0":
@@ -341,7 +341,7 @@ if __name__ == "__main__":
                             if portfolio[stock_code]['qty'] <= 0:
                                 del portfolio[stock_code]
                 else:
-                    print(f"[유지] {stock_code} 현재 수량 유지")
+                    print(f"[유지] {stock_code} 현재 수량 유지", flush=True)
 
             save_portfolio(portfolio)
 
@@ -352,13 +352,13 @@ if __name__ == "__main__":
                     last_price = get_current_price(stock_code)
                     total_value += shares * last_price
             portfolio_values.append(total_value)
-            print(f"[Loop {loop_count}] 평가금액: {total_value:,.0f}")
+            print(f"[Loop {loop_count}] 평가금액: {total_value:,.0f}", flush=True)
 
             loop_count += 1
             time.sleep(600)
 
     except KeyboardInterrupt:
-        print("사용자 중단! 누적 수익률 그래프 저장 중...")
+        print("사용자 중단! 누적 수익률 그래프 저장 중...", flush=True)
 
     finally:
         if portfolio_values:
@@ -374,6 +374,6 @@ if __name__ == "__main__":
             plt.legend()
             plt.tight_layout()
             plt.savefig(os.path.join(OUTPUT_DIR, "누적수익률_그래프.png"), dpi=300)
-            print(f"누적 수익률 그래프 저장 완료 ({OUTPUT_DIR}/누적수익률_그래프.png)")
+            print(f"누적 수익률 그래프 저장 완료 ({OUTPUT_DIR}/누적수익률_그래프.png)", flush=True)
         else:
-            print("저장할 데이터가 없습니다.")
+            print("저장할 데이터가 없습니다.", flush=True)
