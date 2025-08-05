@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
 from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
+sys.stdout.reconfigure(line_buffering=True)
 
 # ───────────── 설정 ─────────────
 OUTPUT_DIR = "rule_2_결과"
