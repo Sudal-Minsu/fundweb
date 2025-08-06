@@ -110,8 +110,7 @@ def engineer_features(df):
     df[['KOSPI','KOSDAQ','USD_KRW']] = df[['KOSPI','KOSDAQ','USD_KRW']].ffill().fillna(0)
     df['KOSPI_RET'] = df['KOSPI'].pct_change().fillna(0)
     df['KOSDAQ_RET'] = df['KOSDAQ'].pct_change().fillna(0)
-
-
+    
     # 결측값 제거
     df = df.replace([np.inf, -np.inf], np.nan)
     df.dropna(subset=FEATURE_COLUMNS, inplace=True)
@@ -363,7 +362,7 @@ def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
             if 'true_label' in res:
                 data['true'].append(res['true_label'])
                 data['pred'].append(res.get('pred_class'))
-
+                
     return stock_models
 
 # 테스트 기간 Confusion Matrix
@@ -373,7 +372,6 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
         true_list = data.get('true', [])
         pred_list = data.get('pred', [])
         for t, p in zip(true_list, pred_list):
-            # t, p 모두 0 또는 1만 허용 
             if t is not None and p in [0, 1]:
                 all_true.append(t)
                 all_pred.append(p)
@@ -390,17 +388,34 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     for t, p in zip(all_true, all_pred):
         cm[t, p] += 1
 
-    # 합계 추가된 3x3 확장 행렬
+    # Confusion Matrix 통계 CSV 저장
+    cm_stats_path = os.path.join(OUTPUT_DIR, "confusion_matrix.csv")
+    rows = []
+    total = cm.sum()
+    for t in range(2):
+        for p in range(2):
+            count = cm[t, p]
+            percent = (count / total * 100) if total > 0 else 0.0
+            rows.append({
+                "실제 라벨": t,
+                "예측 라벨": p,
+                "합계": count,
+                "비율(%)": round(percent, 2)
+            })
+    df_cm_stats = pd.DataFrame(rows, columns=["실제 라벨", "예측 라벨", "합계", "비율(%)"])
+    df_cm_stats.to_csv(cm_stats_path, index=False, encoding="utf-8-sig")
+    print(f"Confusion matrix csv 파일 저장 완료: {cm_stats_path}")
+
+    # 시각화 
     cm_extended = np.zeros((3, 3), dtype=int)
     cm_extended[:2, :2] = cm
-    cm_extended[2, :2] = cm.sum(axis=0)    # 예측 클래스별 합계
-    cm_extended[:2, 2] = cm.sum(axis=1)    # 실제 클래스별 합계
-    cm_extended[2, 2] = cm.sum()           # 전체 합계
+    cm_extended[2, :2] = cm.sum(axis=0)
+    cm_extended[:2, 2] = cm.sum(axis=1)
+    cm_extended[2, 2] = cm.sum()
 
     fig, ax = plt.subplots(figsize=(7, 5))
     cmap = plt.cm.Blues
 
-    # 셀 그리기
     for i in range(3):
         for j in range(3):
             value = cm_extended[i, j]
@@ -412,19 +427,16 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
                 ax.text(j + 0.5, i + 0.5, f"{value}\n({percent:.1f}%)",
                         va='center', ha='center', fontsize=12, color='black')
             else:
-                # 합계 행/열
                 ax.add_patch(plt.Rectangle((j, i), 1, 1, fill=False, edgecolor='black'))
                 ax.text(j + 0.5, i + 0.5, f"{value}",
                         va='center', ha='center', fontsize=12, fontweight='bold')
 
-    # 축 라벨
     ax.set_xticks([0.5, 1.5, 2.5])
     ax.set_yticks([0.5, 1.5, 2.5])
     ax.set_xticklabels(pred_names + ['합계'], fontsize=13)
     ax.set_yticklabels(label_names + ['합계'], fontsize=13)
     ax.set_xlabel('예측 라벨', fontsize=14)
     ax.set_ylabel('실제 라벨', fontsize=14)
-
     ax.set_xlim(0, 3)
     ax.set_ylim(0, 3)
     ax.invert_yaxis()
@@ -433,7 +445,7 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
     print(f"Confusion matrix 저장 완료: {os.path.join(OUTPUT_DIR, filename)}")
-    
+
 # 오늘 매수후보 리스트 생성
 def predict(engine=None):
     today_date = pd.Timestamp.today().normalize()
