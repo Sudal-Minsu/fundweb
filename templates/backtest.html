@@ -72,12 +72,10 @@
       document.getElementById("rmse").innerText = metrics.rmse;
       document.getElementById("accuracy").innerText = metrics.accuracy + "%";
 
-      if (metrics.plot_path) {
-        const img = document.getElementById("forecastImage");
-        img.src = metrics.plot_path + "?t=" + Date.now();
-        img.style.display = "block";
-        document.getElementById("forecastSection").open = true;
-      }
+      // 그래프를 서버에서 동적으로 생성하여 표시
+      const img = document.getElementById("forecastImage");
+      img.src = "/generate-graph?t=" + Date.now();  // 그래프를 동적으로 요청
+      img.style.display = "block";
     }
   </script>
   <style>
@@ -151,7 +149,7 @@
       margin-bottom: 8px;
       font-weight: bold;
     }
-    select, input[type="number"] {
+    select, input[type="number"], input[type="text"] {
       width: 100%;
       padding: 8px;
       margin-bottom: 16px;
@@ -164,15 +162,6 @@
       padding: 10px 20px;
       font-size: 16px;
       margin-top: 10px;
-    }
-    select, input[type="number"], input[type="text"] {
-      width: 100%;
-      padding: 8px;
-      margin-bottom: 16px;
-      background-color: #666;
-      color: white;
-      border: 1px solid #888;
-      border-radius: 4px;
     }
     details summary {
       cursor: pointer;
@@ -220,8 +209,8 @@
     <h2>▸ 주가 예측 모델 설정</h2>
 
     <div class="form-block">
-        <label for="symbol">종목 코드 직접 입력</label>
-        <input type="text" id="symbol" placeholder="예: 005930.KS">
+      <label for="symbol">종목 코드 직접 입력</label>
+      <input type="text" id="symbol" placeholder="예: 005930.KS">
 
       <label for="epochs">학습 Epochs</label>
       <input type="number" id="epochs" value="30" min="1">
