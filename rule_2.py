@@ -1,5 +1,6 @@
 import os
 import random
+import platform
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,11 +31,21 @@ PERCENT = 5
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
 
+# OS에 따라 폰트 경로 설정
+if platform.system() == 'Windows':
+    font_path = "C:/Windows/Fonts/malgun.ttf"
+elif platform.system() == 'Linux':
+    font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+else:
+    font_path = None
+
 # 폰트 설정
-font_path = "C:/Windows/Fonts/malgun.ttf"
-font_name = fm.FontProperties(fname=font_path).get_name()
-plt.rcParams['font.family'] = font_name
-plt.rcParams['axes.unicode_minus'] = False
+if font_path and os.path.exists(font_path):
+    font_name = fm.FontProperties(fname=font_path).get_name()
+    plt.rcParams['font.family'] = font_name
+    plt.rcParams['axes.unicode_minus'] = False
+else:
+    print("⚠️ 지정된 폰트를 찾을 수 없습니다. 한글이 깨질 수 있습니다.")
 
 # 출력 폴더 설정
 OUTPUT_DIR = "rule_2_결과"
