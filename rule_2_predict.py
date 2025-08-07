@@ -313,42 +313,26 @@ def process_code_for_date(args):
     with torch.no_grad():
         prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
 
-    subset = df[df['Date'] < date] # date 하루 전까지 데이터
-
     # 4) 예측 결과 처리 
     result = {}
-    if date in df['Date'].values:
-        future_price = df.loc[df['Date'] == date, 'Close'].iloc[0]
-        base_price = subset.iloc[-1]['Close'] # 1일 전 종가
-        true_label = None
-        # 정답 라벨
-        if future_price > base_price:
-            true_label = 0
-        elif future_price < base_price:
-            true_label = 1
-
-        if true_label is not None:
-            pred_class = None
-            # threshold(α) 이상일 때만 예측 인정
-            if max(prob) >= alpha:
-                if prob[0] > prob[1]:
-                    pred_class = 0
-                    result = {'true_label': true_label, 'pred_class': pred_class, 'prob_up': round(float(prob[0]), 3)}
-                elif prob[1] > prob[0]:
-                    pred_class = 1
-                    result = {'true_label': true_label, 'pred_class': pred_class, 'prob_up': round(float(prob[0]), 3)}
-                else:
-                    result = {}
-            else:
-                result = {}
-
+    if max(prob) >= alpha:
+        if prob[0] > prob[1]:
+            pred_class = 0
+        elif prob[1] > prob[0]:
+            pred_class = 1
+        else:
+            pred_class = None  
+        if pred_class is not None:
+            result = { 
+                'pred_class': pred_class,
+                'prob_up': round(float(prob[0]), 3)
+            }
     return code, result
 
 # ------------------- 테스트 -------------------
 def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
     stock_models = {code: {
         'df': df,
-        'true': [],
         'pred': [],
         'prob_up': []
     } for code, df in preproc_dfs.items()}
@@ -368,12 +352,11 @@ def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
             if not res:
                 continue
             data = stock_models[code]
-            if 'true_label' in res:
-                data['true'].append(res['true_label'])
-                data['pred'].append(res.get('pred_class'))
-                data['prob_up'].append(res.get('prob_up')) 
+            data['pred'].append(res.get('pred_class'))
+            data['prob_up'].append(res.get('prob_up'))
     return stock_models
 
+# ------------------- 예측 -------------------
 def predict(stock_models, test_dates, output_dir):
     latest_idx = -1  # 마지막 날짜 인덱스
     buy_candidates = []
@@ -416,9 +399,10 @@ def main():
     # 4) 날짜 설정
     test_dates = pd.DatetimeIndex([BACKTEST_START_DATE])
 
-    # 5) 백테스트 실행
+    # 5) 테스트 실행
     stock_models = run_test(preproc_dfs, test_dates, conf_percentile=PERCENT)
     
+    # 6) 예측 실행
     predict(stock_models, test_dates, OUTPUT_DIR)
     
     print("예측 및 저장 완료")
