@@ -1,7 +1,7 @@
 from stock_data import run_stock_data  
 import pymysql
 from config import DB_CONFIG
-from rule_2 import predict
+from rule_2_predict import run_rule_2_predict
 
 """ 데이터베이스 생성 """
 def create_database_if_not_exists():
@@ -66,8 +66,10 @@ def run_auto_pipeline():
     print("주식 데이터 수집 시작")  
     run_stock_data()
 
+    print("실시간 매수 후보 예측")
+    run_rule_2_predict()
+    
     print("파이프라인 완료")
 
 if __name__ == "__main__":
     run_auto_pipeline()
-    predict()

@@ -45,7 +45,7 @@ if font_path and os.path.exists(font_path):
     plt.rcParams['font.family'] = font_name
     plt.rcParams['axes.unicode_minus'] = False
 else:
-    print("⚠️ 지정된 폰트를 찾을 수 없습니다. 한글이 깨질 수 있습니다.")
+    print("지정된 폰트를 찾을 수 없습니다.")
 
 # 출력 폴더 설정
 OUTPUT_DIR = "rule_2_결과"
@@ -334,10 +334,10 @@ def process_code_for_date(args):
             if max(prob) >= alpha:
                 if prob[0] > prob[1]:
                     pred_class = 0
-                    result = {'true_label': true_label, 'pred_class': pred_class}
+                    result = {'true_label': true_label, 'pred_class': pred_class, 'prob_up': float(prob[0])}
                 elif prob[1] > prob[0]:
                     pred_class = 1
-                    result = {'true_label': true_label, 'pred_class': pred_class}
+                    result = {'true_label': true_label, 'pred_class': pred_class, 'prob_up': float(prob[0])}
                 else:
                     result = {}
             else:
@@ -351,7 +351,9 @@ def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
     stock_models = {code: {
         'df': df,
         'true': [],
-        'pred': []
+        'pred': [],
+        'date': [],
+        'prob_up': []
     } for code, df in preproc_dfs.items()}
 
     for date in tqdm(test_dates, desc='테스트'):
@@ -373,21 +375,58 @@ def run_test(preproc_dfs, test_dates, conf_percentile=PERCENT):
             if 'true_label' in res:
                 data['true'].append(res['true_label'])
                 data['pred'].append(res.get('pred_class'))
+                data['date'].append(date)
+                data['prob_up'].append(res.get('prob_up'))
                 
     return stock_models
 
 # 테스트 기간 Confusion Matrix
-def plot_score(stock_models, filename="confusion_matrix.png"):
-    all_true, all_pred = [], []
-    for data in stock_models.values():
+def plot_score(stock_models, filename="confusion_matrix.png", csv_filename="raw.csv"):
+    # 집계용(전체), raw 저장용(상승예측만) 따로 누적
+    all_true, all_pred, all_code, all_date, all_prob_up = [], [], [], [], []
+    all_true_all, all_pred_all = [], []  # 집계용
+
+    for code, data in stock_models.items():
         true_list = data.get('true', [])
         pred_list = data.get('pred', [])
-        for t, p in zip(true_list, pred_list):
+        date_list = data.get('date', [])
+        prob_up_list = data.get('prob_up', [])
+        for t, p, d, prob_up in zip(true_list, pred_list, date_list, prob_up_list):
+            # 1. confusion matrix 용 전체 예측 누적
             if t is not None and p in [0, 1]:
+                all_true_all.append(t)
+                all_pred_all.append(p)
+            # 2. raw 저장용: 상승 예측만
+            if t is not None and p == 0:
+                all_code.append(code)
+                all_date.append(str(d)[:10])
                 all_true.append(t)
                 all_pred.append(p)
+                all_prob_up.append(round(prob_up, 3)) 
 
-    if not all_true:
+    # 1. raw.csv (상승 예측만)
+    csv_path = os.path.join(OUTPUT_DIR, csv_filename)
+    df_new = pd.DataFrame({
+        "code": all_code,
+        "date": all_date,
+        "true_label": all_true,
+        "pred_label": all_pred,
+        "prob_up": all_prob_up,
+    })
+    # 만약 기존에 파일이 있다면, 읽어서 병합 후 중복 제거
+    if os.path.exists(csv_path):
+        df_old = pd.read_csv(csv_path, dtype={"code": str, "date": str})
+        df_merge = pd.concat([df_old, df_new], ignore_index=True)
+        df_merge.drop_duplicates(subset=['code', 'date'], keep='last', inplace=True)
+        df_merge.sort_values(by=['date', 'prob_up'], ascending=[False, False], inplace=True)
+        df_merge.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    else:
+        df_new.sort_values(by=['date', 'prob_up'], ascending=[False, False], inplace=True)
+        df_new.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    print(f"Confusion matrix raw 데이터 저장 완료: {csv_path}")
+
+    # Confusion Matrix(전체 예측)
+    if not all_true_all:
         print("유효한 예측 결과가 없어 confusion matrix를 생성하지 않습니다.")
         return
 
@@ -396,7 +435,7 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
 
     # 2x2 행렬
     cm = np.zeros((2, 2), dtype=int)
-    for t, p in zip(all_true, all_pred):
+    for t, p in zip(all_true_all, all_pred_all):
         cm[t, p] += 1
 
     # Confusion Matrix 통계 CSV 저장
@@ -410,14 +449,14 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
             rows.append({
                 "실제 라벨": t,
                 "예측 라벨": p,
-                "합계": count,
+                "건수": count,
                 "비율(%)": round(percent, 2)
             })
-    df_cm_stats = pd.DataFrame(rows, columns=["실제 라벨", "예측 라벨", "합계", "비율(%)"])
+    df_cm_stats = pd.DataFrame(rows, columns=["실제 라벨", "예측 라벨", "건수", "비율(%)"])
     df_cm_stats.to_csv(cm_stats_path, index=False, encoding="utf-8-sig")
-    print(f"Confusion matrix csv 파일 저장 완료: {cm_stats_path}")
+    print(f"Confusion matrix 칸별 집계 저장 완료: {cm_stats_path}")
 
-    # 시각화 
+    # 아래는 시각화 부분 (생략 없음)
     cm_extended = np.zeros((3, 3), dtype=int)
     cm_extended[:2, :2] = cm
     cm_extended[2, :2] = cm.sum(axis=0)
@@ -456,61 +495,6 @@ def plot_score(stock_models, filename="confusion_matrix.png"):
     plt.savefig(os.path.join(OUTPUT_DIR, filename), dpi=300)
     plt.close()
     print(f"Confusion matrix 저장 완료: {os.path.join(OUTPUT_DIR, filename)}")
-
-# 오늘 매수후보 리스트 생성
-def predict(engine=None):
-    today_date = pd.Timestamp.today().normalize()
-    output_path = os.path.join(OUTPUT_DIR, "buy_list.csv")  
-
-    if engine is None:
-        engine = get_engine()
-    
-    limit = 200
-    codes = pd.read_sql(f"SELECT DISTINCT Code FROM stock_data LIMIT {limit}", engine)['Code'].tolist()
-    market_idx_df = load_market_index(engine)
-
-    buy_candidates = []
-    for code in tqdm(codes, desc="실시간 매수 후보 예측"):
-        try:
-            df_stock = load_stock_data(code, engine)
-            df_full = df_stock.merge(market_idx_df, on='Date', how='left')
-            df = engineer_features(df_full)
-
-            train_end = today_date
-            train_start = train_end - pd.DateOffset(years=TRAIN_YEARS)
-            df_train = df[(df['Date'] >= train_start) & (df['Date'] < train_end)]
-
-            model, scalers, best_val, alpha = train_model(df_train, code=code, conf_percentile=PERCENT)
-            if model is None or best_val is None or best_val >= VAL_LOSS_THRESHOLD:
-                continue
-
-            window = df[df['Date'] < today_date].tail(SEQ_LEN)
-            if len(window) < SEQ_LEN:
-                continue
-
-            inp = scale_features(window, scalers)
-            inp_tensor = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device)
-            
-            model.eval()
-            with torch.no_grad():
-                prob = torch.softmax(model(inp_tensor), dim=1).cpu().numpy()[0]
-
-            if max(prob) >= alpha and prob[0] > prob[1]:
-                buy_candidates.append({
-                    '종목코드': code,
-                    '상승확률': round(prob[0], 3)
-                })
-        except Exception:
-            continue
-
-    # 확률 기준으로 정렬
-    buy_candidates_sorted = sorted(buy_candidates, key=lambda x: x['상승확률'], reverse=True)
-
-    # CSV 저장 (후보가 없어도 헤더만 있는 파일 생성)
-    df_out = pd.DataFrame(buy_candidates_sorted, columns=['종목코드', '상승확률'])
-    df_out.to_csv(output_path, index=False, encoding='utf-8-sig')
-
-    return buy_candidates_sorted
         
 # ------------------- 메인 -------------------
 def main():
