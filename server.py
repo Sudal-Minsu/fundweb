@@ -35,8 +35,14 @@ def show_table():
     try:
         conn = pymysql.connect(**DB_CONFIG)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM stock_recommendations")
-        rows = cursor.fetchall()
+
+        # 포트폴리오 요약 가져오기
+        cursor.execute("SELECT * FROM portfolio_summary")
+        summary_rows = cursor.fetchall()
+
+        # 보유 종목(holdings) 가져오기
+        cursor.execute("SELECT symbol, quantity, avg_price, current_price FROM holdings")
+        holding_rows = cursor.fetchall()
 
     except Exception as e:
         print("❌ DB 오류 발생:", e)
@@ -46,19 +52,8 @@ def show_table():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-    return render_template('ping.html', data=rows)
+    return render_template('ping.html', data=summary_rows, holdings=holding_rows)
 
-@app.route('/buy', methods=['POST'])
-def buy_stock():
-    data = request.get_json()
-    stock_code = data.get("stock_code")
-    quantity = int(data.get("quantity", 1))
-
-    try:
-        result = single_trade(stock_code=stock_code, quantity=quantity)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
 
 #홈 페이지 라우트
 @app.route("/home")
