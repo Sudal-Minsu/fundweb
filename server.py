@@ -10,6 +10,7 @@ from functions import read_trades_mysql, single_trade
 from flask_sqlalchemy import SQLAlchemy
 import matplotlib.pyplot as plt
 import io
+from config import DB_CONFIG
 
 app = Flask(__name__)
 modeling_status = {"state": "idle", "metrics": {}, "plot_path": ""}
