@@ -20,7 +20,6 @@ from config import DB_CONFIG
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
 BACKTEST_START_DATE = pd.Timestamp.today().normalize()
-TEST_PERIOD_DAYS = 1
 SEQ_LEN = 5
 BATCH_SIZE = 32
 LEARNING_RATE = 0.0005
@@ -414,10 +413,8 @@ def main():
         df_full = df_stock.merge(market_idx_df, on='Date', how='left')
         preproc_dfs[code] = engineer_features(df_full)
     
-    # 4) 백테스트 날짜 구간 설정
-    dates_df = pd.read_sql(f"SELECT Date FROM stock_data WHERE Code='{codes[0]}' ORDER BY Date", eng, parse_dates=['Date'])
-    start_idx = dates_df[dates_df['Date'] >= BACKTEST_START_DATE].index[0]
-    test_dates = dates_df['Date'].iloc[start_idx : start_idx + TEST_PERIOD_DAYS]
+    # 4) 날짜 설정
+    test_dates = pd.DatetimeIndex([BACKTEST_START_DATE])
 
     # 5) 백테스트 실행
     stock_models = run_test(preproc_dfs, test_dates, conf_percentile=PERCENT)
