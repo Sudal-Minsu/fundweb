@@ -1,7 +1,6 @@
 from stock_data import run_stock_data  
 import pymysql
 from config import DB_CONFIG
-from rule_2 import predict
 from rule_2_predict import run_rule_2_predict
 
 
@@ -75,4 +74,3 @@ def run_auto_pipeline():
 
 if __name__ == "__main__":
     run_auto_pipeline()
-    predict()
