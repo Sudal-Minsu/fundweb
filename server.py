@@ -1,7 +1,6 @@
-from flask import Flask, render_template, abort, jsonify, request, send_from_directory, redirect
+from flask import Flask, render_template, abort, jsonify, request, send_from_directory, redirect, url_for, Response
 import os
 import pymysql
-from config import DB_CONFIG
 import pandas as pd
 from datetime import datetime
 from auto_pipeline import run_auto_pipeline
@@ -9,7 +8,9 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import threading
 from functions import read_trades_mysql, single_trade
 from flask_sqlalchemy import SQLAlchemy
-from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
+import io
+from config import DB_CONFIG
 
 app = Flask(__name__)
 modeling_status = {"state": "idle", "metrics": {}, "plot_path": ""}
@@ -34,8 +35,14 @@ def show_table():
     try:
         conn = pymysql.connect(**DB_CONFIG)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM stock_recommendations")
-        rows = cursor.fetchall()
+
+        # 포트폴리오 요약 가져오기
+        cursor.execute("SELECT * FROM portfolio_summary")
+        summary_rows = cursor.fetchall()
+
+        # 보유 종목(holdings) 가져오기
+        cursor.execute("SELECT symbol, quantity, avg_price, current_price FROM holdings")
+        holding_rows = cursor.fetchall()
 
     except Exception as e:
         print("❌ DB 오류 발생:", e)
@@ -44,32 +51,14 @@ def show_table():
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
-    
 
-    return render_template('ping.html', data=rows)
+    return render_template('ping.html', data=summary_rows, holdings=holding_rows)
 
-@app.route('/buy', methods=['POST'])
-def buy_stock():
-    data = request.get_json()
-    stock_code = data.get("stock_code")
-    quantity = int(data.get("quantity", 1))
-
-    try:
-        result = single_trade(stock_code=stock_code, quantity=quantity)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
 
 #홈 페이지 라우트
 @app.route("/home")
 def home():
     return render_template("home.html")
-
-#결과 폴더 가져오는 용도
-@app.route('/external/<path:filename>')
-def external_static(filename):
-    external_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
-    return send_from_directory(external_dir, filename)
 
 #리포트 페이지 라우트
 @app.route("/report")
@@ -79,27 +68,66 @@ def report():
 #예시 데이터 추후에 코드와 연결 필요요
 @app.route("/confusion-data")
 def confusion_data():
-    matrix = [
-        [596, 214],
-        [411, 251]  
-    ]
-    total = sum(sum(row) for row in matrix)
+    try:
+        result_dir = os.path.join(app.root_path, "rule_2_결과")
+        file_path = os.path.join(result_dir, "confusion_matrix.csv")
 
-    return jsonify({
-        "matrix": matrix,
-        "total": total
-    })
+        if not os.path.exists(file_path):
+            print(f"[ERROR] confusion_matrix.csv 파일이 존재하지 않음: {file_path}")
+            return jsonify({"matrix": [], "total": 0})
+
+        df = pd.read_csv(file_path, encoding="utf-8-sig")
+        df.columns = df.columns.str.strip()
+        df = df.rename(columns={
+            df.columns[0]: "실제 라벨",
+            df.columns[1]: "예측 라벨",
+            df.columns[2]: "합계"
+        })
+
+        pivot = {
+            (int(row["실제 라벨"]), int(row["예측 라벨"])): int(row["합계"])
+            for _, row in df.iterrows()
+        }
+
+        matrix = [
+            [pivot.get((0, 0), 0), pivot.get((0, 1), 0)],
+            [pivot.get((1, 0), 0), pivot.get((1, 1), 0)],
+        ]
+        total = sum(sum(row) for row in matrix)
+
+        return jsonify({
+            "matrix": matrix,
+            "total": total
+        })
+
+    except Exception as e:
+        print(f"[ERROR] confusion_matrix.csv 로드 실패: {e}")
+        return jsonify({"matrix": [], "total": 0})
 
 #매매 로그 로드
 @app.route("/trade-log")
 def trade_log():
     try:
-        external_dir = os.path.abspath(os.path.join(app.root_path, '..', 'rule_2_결과'))
-        file_path = os.path.join(external_dir, 'trade_log.csv')
-
-        df = pd.read_csv(file_path, encoding="utf-8-sig")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "trade_log.csv")
+        if not os.path.exists(file_path):
+            print(f"[ERROR] 파일이 존재하지 않음: {file_path}")
+            return jsonify([])
+        df = pd.read_csv(file_path, encoding="utf-8-sig").fillna("")
+        df = df.tail(20).iloc[::-1]
+        selected_columns = [
+            "거래시간",
+            "기대수익",
+            "상증확률(%)",
+            "손익비",
+            "예상손실",
+            "종목코드",
+            "주문수량",
+            "주문종류",
+            "현재가"
+        ]
+        df = df[selected_columns]
         return jsonify(df.to_dict(orient="records"))
-
     except Exception as e:
         print(f"[ERROR] trade_log.csv 로드 실패: {e}")
         return jsonify([])
@@ -109,69 +137,33 @@ def trade_log():
 def portfolio():
     return render_template("portfolio.html")
 
-#백테스트 페이지 라우트트
+#백테스트 페이지 라우트
 @app.route("/backtest")
 def backtest():
+    # 그래프를 바로 생성하고 반환하는 API 호출
     return render_template("backtest.html")
 
-#그래프 출력용, 예시 데이터 사용, 데이터는 추후 변경 필요
-@app.route("/run-modeling", methods=["POST"])
-def run_modeling():
-    global modeling_status
-    try:
-        data = request.get_json()
-        symbol = data.get("symbol", "005930.KS")
-        epochs = int(data.get("epochs", 30))
-        window_size = int(data.get("window_size", 20))
-        batch_size = int(data.get("batch_size", 32))
+# 그래프를 동적으로 생성하고 HTTP 응답으로 반환
+@app.route("/generate-graph")
+def generate_backtest_graph():
+    # 예시 데이터로 그래프 생성 (적절한 백테스트 데이터를 사용해 그려야 합니다)
+    x = [0, 1, 2, 3, 4]
+    y = [0, 1, 4, 9, 16]
 
-        modeling_status["state"] = "running"
+    fig, ax = plt.subplots()
+    ax.plot(x, y, label='Growth over Time')
+    ax.set_title('Backtest Results')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Growth')
 
-        x_data = np.arange(100)
-        y_data = np.sin(x_data / 5) + np.random.normal(scale=0.1, size=100)
+    # 이미지를 메모리 버퍼에 저장
+    img_buf = io.BytesIO()
+    fig.savefig(img_buf, format='png')
+    img_buf.seek(0)
+    plt.close(fig)  # 메모리 해제
 
-        fig, ax = plt.subplots()
-        line, = ax.plot([], [], lw=2)
-        ax.set_xlim(0, 100)
-        ax.set_ylim(min(y_data) - 0.5, max(y_data) + 0.5)
-        ax.set_title(f"Forecast Result - {symbol}", fontsize=12)
-        ax.set_facecolor("#2f2f2f")
-        fig.patch.set_facecolor("#3a3a3a")
-        ax.tick_params(colors='white')
-        for spine in ax.spines.values():
-            spine.set_color('white')
-
-        def init():
-            line.set_data([], [])
-            return line,
-
-        def update(frame):
-            line.set_data(x_data[:frame], y_data[:frame])
-            return line,
-
-        ani = FuncAnimation(fig, update, frames=len(x_data), init_func=init, blit=True, repeat=False)
-        save_path = os.path.join("static", "forecast_example.gif")
-        ani.save(save_path, writer='pillow')
-        plt.close()
-
-        modeling_status["metrics"] = {
-            "mape": 7.3,
-            "rmse": 0.118,
-            "accuracy": 81.2,
-            "plot_path": "/static/forecast_example.gif"
-        }
-        modeling_status["state"] = "done"
-
-        return jsonify({"status": "ok", "metrics": modeling_status["metrics"]})
-    except Exception as e:
-        modeling_status["state"] = "error"
-        print("[ERROR]", e)
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route("/model-status")
-def model_status():
-    return jsonify({"state": modeling_status["state"], "metrics": modeling_status["metrics"]})
-
+    # 이미지를 HTTP 응답으로 전송
+    return Response(img_buf, mimetype='image/png')
 
 @app.route("/")
 def root():

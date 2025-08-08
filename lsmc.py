@@ -268,8 +268,15 @@ if __name__ == "__main__":
     try:
         while True:
             print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+<<<<<<< HEAD
             
             # 비후보 종목 전략 매도
+=======
+            results = []
+            rr_total = 0
+
+            # 비후보 종목 전략 매도 (잔고없음도 강제 삭제)
+>>>>>>> 8cc13ae1b81f958d75b5f41eac46fa73528555e4
             wait_until_all_non_candidate_sold(portfolio, current_buy_codes)
             save_portfolio(portfolio)
 
@@ -304,7 +311,11 @@ if __name__ == "__main__":
                     result['optimal_qty'] = int(min(qty_by_risk, budget_limited_qty))
                 else:
                     result['optimal_qty'] = 0
+<<<<<<< HEAD
                 print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} 기대수익:{result['expected_profit']:.2f} Qty:{result['optimal_qty']}", flush=True)
+=======
+                print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} Qty:{result['optimal_qty']}", flush=True)
+>>>>>>> 8cc13ae1b81f958d75b5f41eac46fa73528555e4
 
             for result in results_sorted:
                 stock_code = result['code']

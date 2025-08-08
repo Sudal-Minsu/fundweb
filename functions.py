@@ -10,13 +10,12 @@ import keyring
 import os
 import pandas as pd
 
-# 🔹 api key 불러오기
 def get_api_keys():
     """저장된 API 키를 불러오는 함수"""
     app_key = keyring.get_password('mock_app_key', '고민수')
     app_secret = keyring.get_password('mock_app_secret', '고민수')
-    print("✅ app_key:", app_key)
-    print("✅ app_secret:", app_secret)
+    print("app_key:", app_key)
+    print("app_secret:", app_secret)
     return app_key, app_secret
 
 # 🔹 접근토큰 발급

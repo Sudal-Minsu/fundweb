@@ -12,7 +12,7 @@ import config
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
-start_date = today - datetime.timedelta(days=365 * 12)  
+start_date = today - datetime.timedelta(days=365 * 14)  
 
 """ MySQL DB 연결 함수 """
 def get_connection():
@@ -225,7 +225,7 @@ def run_stock_data():
     cursor = conn.cursor()
 
     # 이전 데이터 삭제
-    cutoff_date = today - datetime.timedelta(days=365 * 12)
+    cutoff_date = today - datetime.timedelta(days=365 * 14)
     cursor.execute("DELETE FROM stock_data WHERE Date < %s", (cutoff_date,))
     conn.commit()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
