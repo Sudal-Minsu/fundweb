@@ -114,11 +114,10 @@ def backtest_single_stock(stock_code):
         print(f"❌ 데이터 부족: {stock_code}")
         return
     capital = START_CAPITAL
-<<<<<<< HEAD
-    portfolio_value = []00
-=======
+
     portfolio_value = []
->>>>>>> 9f47a3108bff877f8858617419c3bb52e429a633
+
+    portfolio_value = []
     position = None
     for i in range(30, len(prices) - 10):
         today_price = prices[i]
