@@ -3,6 +3,8 @@ import time
 from config import DB_CONFIG
 import pymysql
 from datetime import datetime
+import pandas as pd
+from pathlib import Path
 
 # 인증 정보 가져오기
 app_key, app_secret, access_token = get_auth_info()
@@ -109,6 +111,42 @@ def save_to_db(res1, portfolio_data):
     conn.close()
     print("DB에 저장 완료 (최신 데이터만 유지)")
 
+def save_to_csv(res1, portfolio_data, out_dir="rule_2_결과"):
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # 1) 보유 종목 CSV
+    holdings_cols = ['종목코드', '보유수량', '매입단가', '현재가']
+    df_holdings = res1.loc[:, holdings_cols].copy()
+
+    # 숫자형 안전 캐스팅
+    df_holdings['보유수량'] = pd.to_numeric(df_holdings['보유수량'], errors='coerce').fillna(0).astype(int)
+    df_holdings['매입단가'] = pd.to_numeric(df_holdings['매입단가'], errors='coerce').fillna(0).astype(int)
+    df_holdings['현재가']   = pd.to_numeric(df_holdings['현재가'], errors='coerce').fillna(0).astype(int)
+
+    # atomic replace 로 덮어쓰기
+    tmp_holdings = out_path / "holdings.tmp.csv"
+    final_holdings = out_path / "holdings.csv"
+    df_holdings.to_csv(tmp_holdings, index=False, encoding="utf-8-sig")
+    tmp_holdings.replace(final_holdings)
+
+    # 2) 포트폴리오 요약 CSV (한 행)
+    df_portfolio = pd.DataFrame([{
+        '보유주식 평가금액': int(portfolio_data.get('보유주식 평가금액') or 0),
+        '총 매수금액':       int(portfolio_data.get('총 매수금액') or 0),
+        '평가손익':         int(portfolio_data.get('평가손익') or 0),
+        '예수금':           int(portfolio_data.get('예수금') or 0),
+        '총 평가자산':       int(portfolio_data.get('총 평가자산') or 0),
+    }])
+
+    tmp_port = out_path / "portfolio_summary.tmp.csv"
+    final_port = out_path / "portfolio_summary.csv"
+    df_portfolio.to_csv(tmp_port, index=False, encoding="utf-8-sig")
+    tmp_port.replace(final_port)
+
+    print(f"CSV 저장 완료 → {final_holdings}, {final_port}")
 
 init_tables()  # 처음 한 번 또는 매 실행 시 호출 OK
 save_to_db(res1, portfolio)
+save_to_csv(res1, portfolio, out_dir="rule_2_결과")
+
