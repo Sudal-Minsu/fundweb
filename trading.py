@@ -13,8 +13,8 @@ from config import ACCOUNT_INFO, get_api_keys
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-MAX_BUY_BUDGET = 10_000_000    # 종목당 최대 매수 금액
-TOP_N_TO_BUY   = 10            # 오늘 후보 중 최대 N개 매수
+MAX_BUY_BUDGET = 20_000_000    # 종목당 최대 매수 금액
+TOP_N_TO_BUY   = 5             # 오늘 후보 중 최대 N개 매수
 LOOP_SLEEP_SEC = 180           # 루프 대기 (초)
 
 # 장 종료 시각(한국 주식): 15:30
@@ -461,11 +461,10 @@ def buy_candidates(holdings, buy_codes, loop_count, bought_today, not_tradable_t
 
 def sell_rules_for_all(holdings, streaks, loop_count):
     """
-    매도 규칙 (비후보/후보 모두 대상)
-    1) 손익률 ≤ -0.5% 또는 ≥ +1% : 시장가(01) 전량 매도
-    2) 손익률이 [0%, +1%] 구간에 2루프 연속 존재 : 시장가(01) 전량 매도
-    (평균가는 pchs_avg_pric만 사용, 없으면 보류)
-    반환: market_closed_detected(bool)
+    매도 규칙:
+    1) 손익률 < -1% 또는 > +1% : 시장가(01) 전량 매도
+    2) 손익률이 0.5% ~ 1% 구간에 2루프 연속 존재 : 시장가(01) 전량 매도
+    3) 손익률이 0% ~ 0.5% 구간에 3루프 연속 존재 : 시장가(01) 전량 매도
     """
     print(f"[루프 {loop_count}] ▶ 매도 검사", flush=True)
     market_closed = False
@@ -474,11 +473,11 @@ def sell_rules_for_all(holdings, streaks, loop_count):
         qty = pos.get('qty', 0)
         avg = pos.get('avg_price', None)
         if qty <= 0:
-            streaks[code] = 0
+            streaks[code] = {"low":0, "mid":0}
             continue
         if avg is None:
-            print(f"  • {code} 평균가 없음(pchs_avg_pric 미제공) → 매도 판단 보류", flush=True)
-            streaks[code] = 0
+            print(f"  • {code} 평균가 없음 → 매도 판단 보류", flush=True)
+            streaks[code] = {"low":0, "mid":0}
             continue
 
         cur = pos.get('cur_price', None) or get_current_price(code)
@@ -490,38 +489,57 @@ def sell_rules_for_all(holdings, streaks, loop_count):
         print(f"  • {code} 현재가:{cur} 평균가:{avg} 수익률:{pnl_pct:.2f}%", flush=True)
 
         # 규칙 1
-        if pnl_pct <= -0.5 or pnl_pct >= 1.0:
+        if pnl_pct < -1 or pnl_pct > 1.0:
             print(f"    → 규칙1 충족: {pnl_pct:.2f}% ▶ 시장가 전량 매도", flush=True)
             result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
             msg = (result.get("msg1") or "").strip()
             log_trade(datetime.now(), code, cur, qty, "매도(규칙1)", result)
             print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
             if is_market_closed_msg(msg):
-                print("⛔ 시장 종료 감지(매도 응답) → 루프 종료 예정", flush=True)
+                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
                 market_closed = True
-            streaks[code] = 0
+            streaks[code] = {"low":0, "mid":0}
             if market_closed:
                 break
             continue
 
-        # 규칙 2
-        if 0.0 < pnl_pct <= 1.0:
-            streaks[code] = streaks.get(code, 0) + 1
+        # 규칙 2 (0.5% ~ 1% 구간 2루프 연속)
+        if 0.5 < pnl_pct <= 1.0:
+            streaks.setdefault(code, {"low":0, "mid":0})
+            streaks[code]["mid"] += 1
         else:
-            streaks[code] = 0
-        print(f"    → 규칙2 카운트: {streaks[code]}", flush=True)
+            if code in streaks: streaks[code]["mid"] = 0
 
-        if streaks[code] >= 2:
+        if streaks.get(code, {}).get("mid", 0) >= 2:
             print(f"    → 규칙2 충족 ▶ 시장가 전량 매도", flush=True)
             result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
             msg = (result.get("msg1") or "").strip()
             log_trade(datetime.now(), code, cur, qty, "매도(규칙2)", result)
             print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
             if is_market_closed_msg(msg):
-                print("⛔ 시장 종료 감지(매도 응답) → 루프 종료 예정", flush=True)
+                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
                 market_closed = True
                 break
-            streaks[code] = 0
+            streaks[code]["mid"] = 0
+
+        # 규칙 3 (0% ~ 0.5% 구간 3루프 연속)
+        if 0.0 < pnl_pct <= 0.5:
+            streaks.setdefault(code, {"low":0, "mid":0})
+            streaks[code]["low"] += 1
+        else:
+            if code in streaks: streaks[code]["low"] = 0
+
+        if streaks.get(code, {}).get("low", 0) >= 3:
+            print(f"    → 규칙3 충족 ▶ 시장가 전량 매도", flush=True)
+            result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
+            msg = (result.get("msg1") or "").strip()
+            log_trade(datetime.now(), code, cur, qty, "매도(규칙3)", result)
+            print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
+            if is_market_closed_msg(msg):
+                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
+                market_closed = True
+                break
+            streaks[code]["low"] = 0
 
     return market_closed
 
@@ -639,7 +657,7 @@ if __name__ == "__main__":
     start_loop = loop_count
 
     portfolio_values = []  # 총 평가금액 로그(내부)
-    streaks = defaultdict(int)   # 규칙2 카운터(메모리만 사용)
+    streaks = defaultdict(lambda: {"low": 0, "mid": 0})
 
     # 날짜 및 당일 상태
     last_date = None
