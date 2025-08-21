@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>StockLENS</title>
+  <title>Strategy</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     html, body {
@@ -13,6 +13,7 @@
       overflow-x: auto;
       width: 100%;
     }
+
     nav {
       display: flex;
       justify-content: space-between;
@@ -66,29 +67,14 @@
       background-color: white !important;
       color: #52545a !important;
     }
-    .home-main {
-      background-color: #0A1E3F;
-      height: 90vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-    }
-    .home-title {
-      font-family: 'DM Serif Display', serif;
-      font-size: 64px;
+
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
       color: white;
-      margin-bottom: 12px;
-      letter-spacing: 14px;
+      min-height: 600px;
     }
-    .home-sub {
-      font-size: 18px;
-      color: #d9d9d9;
-    }
-    footer {
-      background-color: #ffffff;
-      height: 80px;
-    }
+
   </style>
 </head>
 <body>
@@ -96,20 +82,16 @@
     <div class="nav-left">
       <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
       <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Strategy</span>
     </div>
     <div class="nav-links">
       <a href="/home" class="home-button">Home</a>
       <a href="/portfolio">Portfolio</a>
-      <a href="/forecast">Forecast</a>
+      <a href="/forecast" class="active">Forecast</a>
       <a href="/strategy">Strategy</a>
     </div>
   </nav>
 
-  <div class="home-main">
-    <div class="home-title">StockLENS</div>
-    <div class="home-sub">주식 분석 · 매매</div>
-  </div>
-
-  <footer></footer>
+  <div class="main">
 </body>
 </html>

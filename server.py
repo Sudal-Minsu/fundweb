@@ -60,78 +60,6 @@ def show_table():
 def home():
     return render_template("home.html")
 
-#리포트 페이지 라우트
-@app.route("/report")
-def report():
-    return render_template("report.html")
-
-#예시 데이터 추후에 코드와 연결 필요요
-@app.route("/confusion-data")
-def confusion_data():
-    try:
-        result_dir = os.path.join(app.root_path, "rule_2_결과")
-        file_path = os.path.join(result_dir, "confusion_matrix.csv")
-
-        if not os.path.exists(file_path):
-            print(f"[ERROR] confusion_matrix.csv 파일이 존재하지 않음: {file_path}")
-            return jsonify({"matrix": [], "total": 0})
-
-        df = pd.read_csv(file_path, encoding="utf-8-sig")
-        df.columns = df.columns.str.strip()
-        df = df.rename(columns={
-            df.columns[0]: "실제 라벨",
-            df.columns[1]: "예측 라벨",
-            df.columns[2]: "합계"
-        })
-
-        pivot = {
-            (int(row["실제 라벨"]), int(row["예측 라벨"])): int(row["합계"])
-            for _, row in df.iterrows()
-        }
-
-        matrix = [
-            [pivot.get((0, 0), 0), pivot.get((0, 1), 0)],
-            [pivot.get((1, 0), 0), pivot.get((1, 1), 0)],
-        ]
-        total = sum(sum(row) for row in matrix)
-
-        return jsonify({
-            "matrix": matrix,
-            "total": total
-        })
-
-    except Exception as e:
-        print(f"[ERROR] confusion_matrix.csv 로드 실패: {e}")
-        return jsonify({"matrix": [], "total": 0})
-
-#매매 로그 로드
-@app.route("/trade-log")
-def trade_log():
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(base_dir, "trade_log.csv")
-        if not os.path.exists(file_path):
-            print(f"[ERROR] 파일이 존재하지 않음: {file_path}")
-            return jsonify([])
-        df = pd.read_csv(file_path, encoding="utf-8-sig").fillna("")
-        df = df.tail(20).iloc[::-1]
-        selected_columns = [
-            "거래시간",
-            "기대수익",
-            "상증확률(%)",
-            "손익비",
-            "예상손실",
-            "종목코드",
-            "주문수량",
-            "주문종류",
-            "현재가"
-        ]
-        df = df[selected_columns]
-        return jsonify(df.to_dict(orient="records"))
-    except Exception as e:
-        print(f"[ERROR] trade_log.csv 로드 실패: {e}")
-        return jsonify([])
-
 #포트폴리오 페이지 라우트    
 @app.route("/portfolio")
 def portfolio():
@@ -190,11 +118,110 @@ def portfolio():
         print(f"[ERROR] /portfolio 실패: {e}")
         return f"<h2>/portfolio 로드 실패: {e}</h2>"
 
-#백테스트 페이지 라우트
-@app.route("/backtest")
-def backtest():
-    # 그래프를 바로 생성하고 반환하는 API 호출
-    return render_template("backtest.html")
+# 누적 수익률 그래프 로드
+@app.route("/cumulative-returns")
+def cumulative_returns():
+    try:
+        result_dir = os.path.join(app.root_path, "rule_2_결과")
+        file_path = os.path.join(result_dir, "총평가금액.csv")
+        if not os.path.exists(file_path):
+            return jsonify({"labels": [], "values": []})
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df = pd.read_csv(file_path, encoding="cp949")
+        df.columns = df.columns.str.strip()
+        if "loop" not in df.columns or "총평가금액" not in df.columns:
+            return jsonify({"labels": [], "values": []})
+        df["총평가금액"] = pd.to_numeric(df["총평가금액"], errors="coerce")
+        df = df.dropna(subset=["총평가금액"])
+        labels = df["loop"].astype(str).tolist()
+        values = df["총평가금액"].astype(float).tolist()
+        return jsonify({"labels": labels, "values": values})
+    except Exception as e:
+        print("[ERROR] cumulative-returns:", e)
+        return jsonify({"labels": labels, "returns": values})
+
+#forecast 페이지 라우트
+@app.route("/forecast")
+def forecast():
+    return render_template("forecast.html")
+
+#리포트 페이지 라우트
+@app.route("/strategy")
+def strategy():
+    return render_template("strategy.html")
+
+# confusion matrix 로드
+@app.route("/confusion-data")
+def confusion_data():
+    try:
+        result_dir = os.path.join(app.root_path, "rule_2_결과")
+        file_path = os.path.join(result_dir, "confusion_matrix.csv")
+
+        if not os.path.exists(file_path):
+            print(f"[ERROR] confusion_matrix.csv 파일이 존재하지 않음: {file_path}")
+            return jsonify({"matrix": [], "total": 0})
+
+        df = pd.read_csv(file_path, encoding="utf-8-sig")
+        df.columns = df.columns.str.strip()
+        df = df.rename(columns={
+            df.columns[0]: "실제 라벨",
+            df.columns[1]: "예측 라벨",
+            df.columns[2]: "합계"
+        })
+
+        pivot = {
+            (int(row["실제 라벨"]), int(row["예측 라벨"])): int(row["합계"])
+            for _, row in df.iterrows()
+        }
+
+        matrix = [
+            [pivot.get((0, 0), 0), pivot.get((0, 1), 0)],
+            [pivot.get((1, 0), 0), pivot.get((1, 1), 0)],
+        ]
+        total = sum(sum(row) for row in matrix)
+
+        return jsonify({
+            "matrix": matrix,
+            "total": total
+        })
+
+    except Exception as e:
+        print(f"[ERROR] confusion_matrix.csv 로드 실패: {e}")
+        return jsonify({"matrix": [], "total": 0})
+
+#매매 로그 로드
+@app.route("/trade-log")
+def trade_log():
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "trade_log.csv")
+        if not os.path.exists(file_path):
+            print(f"[ERROR] 파일이 존재하지 않음: {file_path}")
+            return jsonify([])
+        df = pd.read_csv(file_path, encoding="utf-8-sig").fillna("")
+        df["거래시간"] = pd.to_datetime(
+            df["거래시간"].astype(str).str.strip(),
+            format="%Y-%m-%d %H:%M:%S.%f",
+            errors="coerce"
+        )
+        df["거래시간"] = df["거래시간"].dt.strftime("%Y-%m-%d %H:%M")
+        df = df[df["주문결과"] == "모의투자 매수주문이 완료 되었습니다."]
+        df = df.tail(10).iloc[::-1]
+        selected_columns = [
+            "거래시간",
+            "종목코드",
+            "현재가",
+            "주문수량",
+            "주문종류",
+        ]
+        df = df[selected_columns]
+        return jsonify(df.to_dict(orient="records"))
+
+    except Exception as e:
+        print(f"[ERROR] trade_log.csv 로드 실패: {e}")
+        return jsonify([])
 
 @app.route("/")
 def root():

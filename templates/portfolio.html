@@ -5,11 +5,13 @@
   <title>Portfolio</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
-    body {
+    html, body {
       margin: 0;
       font-family: Arial, sans-serif;
       background-color: #3a3a3a;
       color: white;
+      overflow-x: auto;
+      width: 100%;
     }
     nav {
       display: flex;
@@ -18,18 +20,32 @@
       padding: 8px 24px;
       background-color: #ffffff;
       border-bottom: 1px solid #ccc;
+      white-space: nowrap;
     }
-    .nav-left { display: flex; align-items: center; }
-    .nav-left img { height: 32px; margin-right: 10px; }
+
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
     .nav-left a {
       font-size: 24px;
       font-family: 'DM Serif Display', serif;
       color: black;
       text-decoration: none;
       letter-spacing: 3px;
+      white-space: nowrap;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
     }
     .nav-links a {
-      margin-left: 12px;
       padding: 6px 12px;
       text-decoration: none;
       color: black;
@@ -37,12 +53,30 @@
       border-radius: 4px;
       background-color: #d9d9d9;
       transition: background-color 0.2s;
+      white-space: nowrap;
     }
-    .nav-links a:hover, .nav-links a.active { background-color: #c0c0c0; }
-    .home-button { background-color: #52545a !important; color: white !important; }
-    .home-button:hover { background-color: white !important; color: #52545a !important; }
-    .main { padding: 40px 60px; background-color: #3a3a3a; color: white; min-height: 600px; }
-    .matrix-title { font-size: 24px; margin: 8px 0 18px; letter-spacing: 1px; text-align: center; }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main { 
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    .matrix-title { font-size: 24px;
+      margin: 8px 0 18px;
+      letter-spacing: 1px;
+      text-align: center;
+    }
     .matrix-table {
       width: 100%;
       border-collapse: collapse;
@@ -51,7 +85,7 @@
       table-layout: fixed;
     }
     .matrix-table thead th {
-      background: #2f4f4f;
+      background: #555;
       color: #e8e8e8;
       font-weight: bold;
       border: 1px solid #888;
@@ -66,6 +100,8 @@
     }
     .matrix-table tbody tr:hover td { filter: brightness(1.2); }
     .section-spacer { height: 40px; }
+    .chart-wrap { width: 100%; height: 320px; margin-top: 16px; }
+    .chart-card { border: 1px solid #888; border-radius: 6px; padding: 12px; background: #2f2f2f; }
   </style>
 </head>
 <body>
@@ -77,9 +113,9 @@
     </div>
     <div class="nav-links">
       <a href="/home" class="home-button">Home</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/report">Report</a>
+      <a href="/portfolio" class="active">Portfolio</a>
+      <a href="/forecast">Forecast</a>
+      <a href="/strategy">Strategy</a>
     </div>
   </nav>
 
@@ -126,17 +162,126 @@
             {% set buy = (row.get('매입단가','0') | replace(',','') | float) %}
             {% set now = (row.get('현재가','0') | replace(',','') | float) %}
             {% if now > buy %}
-              <span style="color: #ff6b6b;">이익</span>
+              <span style="color:#e57373; font-weight:600;">이익</span>
             {% elif now < buy %}
-              <span style="color: #4da6ff;">손해</span>
+              <span style="color:#64b5f6; font-weight:600;">손해</span>
             {% else %}
-              <span style="color: white;">-</span>
+              <span style="color:#e0e0e0;">-</span>
             {% endif %}
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+
+    <div class="section-spacer"></div>
+
+    <h2 class="matrix-title" style="margin-top:60px;">▸ 누적 수익률</h2>
+    <div class="chart-card">
+      <div class="chart-wrap">
+        <canvas id="cumChart"></canvas>
+      </div>
+    </div>
   </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    async function drawCumChart() {
+      try {
+        const res = await fetch("/cumulative-returns");
+        const data = await res.json();
+        console.log("서버 응답:", data);
+
+        const ctx = document.getElementById("cumChart").getContext("2d");
+
+        if (window.cumChart && typeof window.cumChart.destroy === "function") {
+          window.cumChart.destroy();
+        }
+
+        window.cumChart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: data.labels,
+            datasets: [{
+              label: "총 평가금액",
+              data: data.values,
+              borderWidth: 2,
+              borderColor: "#40e0d0",
+              backgroundColor: "rgba(154,196,255,0.15)",
+              pointRadius: 2,
+              tension: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                grid: { color: "#555" },
+                ticks: { display: false }
+              },
+              y: {
+                grid: { color: "#555" },
+                ticks: {color: "#e0e0e0",
+                  callback: function(v) {
+                    return new Intl.NumberFormat().format(v);
+                  }
+                }
+              }
+            },
+                        plugins: {
+              legend: { labels: { color: "#e0e0e0" } },
+              tooltip: {
+                enabled: false,
+                external: function(context) {
+                  let tooltipEl = document.getElementById("chartjs-tooltip");
+                  if (!tooltipEl) {
+                    tooltipEl = document.createElement("div");
+                    tooltipEl.id = "chartjs-tooltip";
+                    tooltipEl.style.position = "absolute";
+                    tooltipEl.style.background = "rgba(0,0,0,0.75)";
+                    tooltipEl.style.color = "white";
+                    tooltipEl.style.padding = "6px 10px";
+                    tooltipEl.style.borderRadius = "4px";
+                    tooltipEl.style.pointerEvents = "none";
+                    tooltipEl.style.transition = "0.1s ease";
+                    document.body.appendChild(tooltipEl);
+                  }
+
+                  const tooltipModel = context.tooltip;
+                  if (tooltipModel.opacity === 0) {
+                    tooltipEl.style.opacity = 0;
+                    return;
+                  }
+
+                  const index = tooltipModel.dataPoints[0].dataIndex;
+                  const dataset = tooltipModel.dataPoints[0].dataset.data;
+                  const current = dataset[index];
+                  const prev = index > 0 ? dataset[index - 1] : current;
+
+                  let symbol = `<span style="color:#e0e0e0;">-</span>`;
+                  if (current > prev) symbol = `<span style="color:red;">▲</span>`;
+                  else if (current < prev) symbol = `<span style="color:skyblue;">▼</span>`;
+
+                  tooltipEl.innerHTML = `
+                    ${symbol} 보유 자산 현황: ${new Intl.NumberFormat().format(current)}
+                  `;
+
+                  const { offsetLeft: positionX, offsetTop: positionY } = context.chart.canvas;
+                  tooltipEl.style.left = positionX + tooltipModel.caretX + 20 + "px";
+                  tooltipEl.style.top = positionY + tooltipModel.caretY + "px";
+                  tooltipEl.style.opacity = 1;
+                }
+              }
+            }
+          }
+        });
+      } catch (e) {
+        console.error("drawCumChart 오류:", e);
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", drawCumChart);
+  </script>
 </body>
 </html>

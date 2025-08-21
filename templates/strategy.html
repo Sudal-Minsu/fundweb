@@ -2,15 +2,18 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Report</title>
+  <title>Strategy</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
-    body {
+    html, body {
       margin: 0;
       font-family: Arial, sans-serif;
       background-color: #3a3a3a;
       color: white;
+      overflow-x: auto;
+      width: 100%;
     }
+
     nav {
       display: flex;
       justify-content: space-between;
@@ -18,7 +21,9 @@
       padding: 8px 24px;
       background-color: #ffffff;
       border-bottom: 1px solid #ccc;
+      white-space: nowrap;
     }
+
     .nav-left {
       display: flex;
       align-items: center;
@@ -33,9 +38,15 @@
       color: black;
       text-decoration: none;
       letter-spacing: 3px;
+      white-space: nowrap;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
     }
     .nav-links a {
-      margin-left: 12px;
       padding: 6px 12px;
       text-decoration: none;
       color: black;
@@ -43,6 +54,7 @@
       border-radius: 4px;
       background-color: #d9d9d9;
       transition: background-color 0.2s;
+      white-space: nowrap;
     }
     .nav-links a:hover, .nav-links a.active {
       background-color: #c0c0c0;
@@ -55,26 +67,86 @@
       background-color: white !important;
       color: #52545a !important;
     }
+
     .main {
       padding: 40px 60px;
       background-color: #3a3a3a;
       color: white;
       min-height: 600px;
     }
+
     table {
       border-collapse: collapse;
-      margin: 0 auto;
-      margin-bottom: 40px;
+      margin: 0 auto 40px auto;
       font-size: 16px;
       text-align: center;
-      background-color: #2f2f2f;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
     }
+
     th, td {
       border: 1px solid #888;
       padding: 10px;
+      white-space: nowrap;
     }
     th {
       background-color: #555;
+      color: white;
+    }
+
+    .cm-table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 16px;
+      text-align: center;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
+      background-color: #3a3a3a;
+    }
+    .cm-table td:first-child {
+      padding: 12px 16px;
+      font-size: 14px;
+      min-width:60px;
+    }
+    .cm-cell {
+      padding: 50px;
+      min-height: 100px;
+      border: 1px solid #888;
+      color: white;
+    }
+    .cm-header {
+      background-color: #3a3a3a;
+      font-weight: bold;
+      padding: 12px 16px;
+      min-height: auto;
+    }
+    .cm-sum {
+      background-color: #3a3a3a;
+      font-weight: bold;
+      padding: 12px 16px;
+      font-size: 14px;
+      min-width: 60px;
+    }
+
+    .trade-cell {
+      padding: 8px;
+      border: 1px solid #888;
+      background-color: #3a3a3a;
+      color: white;
+    }
+    .profit-positive {
+      color: #ff5c5c;
+      font-weight: bold;
+    }
+    .profit-negative {
+      color: #5caeff;
+      font-weight: bold;
+    }
+    .profit-zero {
+      color: white;
+      font-weight: bold;
     }
   </style>
 </head>
@@ -83,22 +155,22 @@
     <div class="nav-left">
       <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
       <a href="/home">StockLENS</a>
-      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Report</span>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Strategy</span>
     </div>
     <div class="nav-links">
       <a href="/home" class="home-button">Home</a>
       <a href="/portfolio">Portfolio</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/report" class="active">Report</a>
+      <a href="/forecast">Forecast</a>
+      <a href="/strategy" class="active">Strategy</a>
     </div>
   </nav>
 
   <div class="main">
     <h2 style="text-align: center;">▸ 모델 성능</h2>
-    <div id="confusionMatrixContainer" style="overflow-x:auto;"></div>
+    <div id="confusionMatrixContainer"></div>
 
     <h2 style="text-align: center; margin-top: 60px;">▸ 매매 로그</h2>
-    <div id="tradeLogContainer" style="overflow-x: auto; margin-top: 20px;"></div>
+    <div id="tradeLogContainer" style="margin-top: 20px;"></div>
   </div>
 
   <script>
@@ -111,29 +183,25 @@
       const cmContainer = document.getElementById("confusionMatrixContainer");
 
       const cmTable = document.createElement("table");
-      cmTable.style.width = "100%";
+      cmTable.classList.add("cm-table");
 
-      const makeCell = (text, bg, bold = false) => {
+      const makeCell = (text, classes = [], bg = null) => {
         const td = document.createElement("td");
         td.innerHTML = text;
-        td.style.padding = "10px";
-        td.style.minHeight = "80px";
-        td.style.border = "1px solid #888";
-        td.style.backgroundColor = bg || "#2f2f2f";
-        td.style.color = "white";
-        if (bold) td.style.fontWeight = "bold";
+        td.classList.add("cm-cell", ...classes);
+        if (bg) td.style.backgroundColor = bg;
         return td;
       };
 
       const header = document.createElement("tr");
-      header.appendChild(makeCell("실제 \\ 예측", "#3a3a3a", true));
-      cmLabels.forEach(label => header.appendChild(makeCell(label, "#3a3a3a", true)));
-      header.appendChild(makeCell("합계", "#3a3a3a", true));
+      header.appendChild(makeCell("실제 \\ 예측", ["cm-header"]));
+      cmLabels.forEach(label => header.appendChild(makeCell(label, ["cm-header"])));
+      header.appendChild(makeCell("합계", ["cm-header"]));
       cmTable.appendChild(header);
 
       for (let i = 0; i < 2; i++) {
         const row = document.createElement("tr");
-        row.appendChild(makeCell(cmLabels[i], "#3a3a3a", true));
+        row.appendChild(makeCell(cmLabels[i], ["cm-header"]));
         let rowSum = 0;
         for (let j = 0; j < 2; j++) {
           const val = cm[i][j];
@@ -142,42 +210,38 @@
           const intensity = Math.floor((val / total) * 100);
           const baseR = 60, baseG = 80, baseB = 40;
           const bg = `rgb(${baseR + intensity}, ${baseG + intensity}, ${baseB})`;
-          row.appendChild(makeCell(`${val}<br><span style="font-size:14px;">(${percent}%)</span>`, bg));
+          row.appendChild(makeCell(`${val}<br><span style="font-size:14px;">(${percent}%)</span>`, [], bg));
         }
-        row.appendChild(makeCell(rowSum, "#3a3a3a", true));
+        row.appendChild(makeCell(rowSum, ["cm-sum"]));
         cmTable.appendChild(row);
       }
 
       const sumRow = document.createElement("tr");
-      sumRow.appendChild(makeCell("합계", "#3a3a3a", true));
+      sumRow.appendChild(makeCell("합계", ["cm-sum"]));
       for (let j = 0; j < 2; j++) {
         const sum = cm[0][j] + cm[1][j];
-        sumRow.appendChild(makeCell(sum, "#3a3a3a", true));
+        sumRow.appendChild(makeCell(sum, ["cm-sum"]));
       }
-      sumRow.appendChild(makeCell(total, "#3a3a3a", true));
+      sumRow.appendChild(makeCell(total, ["cm-sum"]));
       cmTable.appendChild(sumRow);
       cmContainer.appendChild(cmTable);
 
-      // Trade log
       const logRes = await fetch("/trade-log");
       const logData = await logRes.json();
       const container = document.getElementById("tradeLogContainer");
 
       if (logData.length === 0) {
-        container.innerHTML = "<p style='text-align:center;'>📭 매매 로그가 없습니다.</p>";
+        container.innerHTML = "<p style='text-align:center;'> 매매 로그가 없습니다.</p>";
         return;
       }
 
       const table = document.createElement("table");
-      table.style.width = "100%";
+      table.classList.add("trade-table");
+
       const headerRow = document.createElement("tr");
       Object.keys(logData[0]).forEach(col => {
         const th = document.createElement("th");
         th.textContent = col;
-        th.style.backgroundColor = "#555";
-        th.style.color = "white";
-        th.style.padding = "8px";
-        th.style.border = "1px solid #888";
         headerRow.appendChild(th);
       });
       table.appendChild(headerRow);
@@ -187,19 +251,16 @@
         Object.entries(row).forEach(([key, val]) => {
           const td = document.createElement("td");
           td.textContent = val;
-          td.style.padding = "8px";
-          td.style.border = "1px solid #888";
-          td.style.backgroundColor = "#444";
-          td.style.color = "white";
+          td.classList.add("trade-cell");
 
           if (key.includes("수익률") || key.includes("익") || key.toLowerCase().includes("return")) {
             const numeric = parseFloat(val);
             if (!isNaN(numeric)) {
-              td.style.color = numeric > 0 ? "#ff5c5c" : numeric < 0 ? "#5caeff" : "white";
-              td.style.fontWeight = "bold";
+              if (numeric > 0) td.classList.add("profit-positive");
+              else if (numeric < 0) td.classList.add("profit-negative");
+              else td.classList.add("profit-zero");
             }
           }
-
           tr.appendChild(td);
         });
         table.appendChild(tr);
