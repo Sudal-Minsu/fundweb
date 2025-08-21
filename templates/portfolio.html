@@ -19,14 +19,8 @@
       background-color: #ffffff;
       border-bottom: 1px solid #ccc;
     }
-    .nav-left {
-      display: flex;
-      align-items: center;
-    }
-    .nav-left img {
-      height: 32px;
-      margin-right: 10px;
-    }
+    .nav-left { display: flex; align-items: center; }
+    .nav-left img { height: 32px; margin-right: 10px; }
     .nav-left a {
       font-size: 24px;
       font-family: 'DM Serif Display', serif;
@@ -44,23 +38,34 @@
       background-color: #d9d9d9;
       transition: background-color 0.2s;
     }
-    .nav-links a:hover, .nav-links a.active {
-      background-color: #c0c0c0;
+    .nav-links a:hover, .nav-links a.active { background-color: #c0c0c0; }
+    .home-button { background-color: #52545a !important; color: white !important; }
+    .home-button:hover { background-color: white !important; color: #52545a !important; }
+    .main { padding: 40px 60px; background-color: #3a3a3a; color: white; min-height: 600px; }
+    .matrix-title { font-size: 24px; margin: 8px 0 18px; letter-spacing: 1px; text-align: center; }
+    .matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #3a3a3a;
+      border: 1px solid #888;
+      table-layout: fixed;
     }
-    .home-button {
-      background-color: #52545a !important;
-      color: white !important;
+    .matrix-table thead th {
+      background: #2f4f4f;
+      color: #e8e8e8;
+      font-weight: bold;
+      border: 1px solid #888;
+      padding: 14px 10px;
+      text-align: center;
     }
-    .home-button:hover {
-      background-color: white !important;
-      color: #52545a !important;
+    .matrix-table tbody td {
+      border: 1px solid #888;
+      padding: 20px 10px;
+      text-align: center;
+      background: #3a3a3a;
     }
-    .main {
-      padding: 40px 60px;
-      background-color: #3a3a3a;
-      color: white;
-      min-height: 600px;
-    }
+    .matrix-table tbody tr:hover td { filter: brightness(1.2); }
+    .section-spacer { height: 40px; }
   </style>
 </head>
 <body>
@@ -79,6 +84,59 @@
   </nav>
 
   <div class="main">
+    <h2 class="matrix-title" style="margin-top:20px;">▸ 포트폴리오 요약</h2>
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          {% for c in summary_cols %}
+          <th>{{ c }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in summary_rows %}
+        <tr>
+          {% for c in summary_cols %}
+          <td>{{ row.get(c, "") }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="section-spacer"></div>
+
+    <h2 class="matrix-title" style="margin-top:60px;">▸ 보유 종목 현황</h2>
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          {% for c in holdings_cols %}
+          <th>{{ c }}</th>
+          {% endfor %}
+          <th>손익</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in holdings_rows %}
+        <tr>
+          {% for c in holdings_cols %}
+          <td>{{ row.get(c, "") }}</td>
+          {% endfor %}
+          <td>
+            {% set buy = (row.get('매입단가','0') | replace(',','') | float) %}
+            {% set now = (row.get('현재가','0') | replace(',','') | float) %}
+            {% if now > buy %}
+              <span style="color: #ff6b6b;">이익</span>
+            {% elif now < buy %}
+              <span style="color: #4da6ff;">손해</span>
+            {% else %}
+              <span style="color: white;">-</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </body>
 </html>
