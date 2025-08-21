@@ -209,19 +209,8 @@
     <h2>▸ 주가 예측 모델 설정</h2>
 
     <div class="form-block">
-      <label for="symbol">종목 코드 직접 입력</label>
+      <label for="symbol">전략 선택</label>
       <input type="text" id="symbol" placeholder="예: 005930.KS">
-
-      <label for="epochs">학습 Epochs</label>
-      <input type="number" id="epochs" value="30" min="1">
-
-      <label for="window">입력 시계열 길이</label>
-      <input type="number" id="window" value="20" min="1">
-
-      <label for="batch">배치 크기</label>
-      <input type="number" id="batch" value="32" min="1">
-
-      <button onclick="runModeling()">모델 학습 실행</button>
 
       <div class="status-line">현재 상태: <span id="modelStatus">-</span></div>
     </div>

@@ -65,7 +65,7 @@
       border-collapse: collapse;
       margin: 0 auto;
       margin-bottom: 40px;
-      font-size: 14px;
+      font-size: 16px;
       text-align: center;
       background-color: #2f2f2f;
     }
@@ -117,7 +117,7 @@
         const td = document.createElement("td");
         td.innerHTML = text;
         td.style.padding = "10px";
-        td.style.minHeight = "80px"; // 세로 길이 증가
+        td.style.minHeight = "80px";
         td.style.border = "1px solid #888";
         td.style.backgroundColor = bg || "#2f2f2f";
         td.style.color = "white";
@@ -142,7 +142,7 @@
           const intensity = Math.floor((val / total) * 100);
           const baseR = 60, baseG = 80, baseB = 40;
           const bg = `rgb(${baseR + intensity}, ${baseG + intensity}, ${baseB})`;
-          row.appendChild(makeCell(`${val}<br><span style="font-size:12px;">(${percent}%)</span>`, bg));
+          row.appendChild(makeCell(`${val}<br><span style="font-size:14px;">(${percent}%)</span>`, bg));
         }
         row.appendChild(makeCell(rowSum, "#3a3a3a", true));
         cmTable.appendChild(row);

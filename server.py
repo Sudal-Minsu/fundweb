@@ -135,35 +135,66 @@ def trade_log():
 #포트폴리오 페이지 라우트    
 @app.route("/portfolio")
 def portfolio():
-    return render_template("portfolio.html")
+    try:
+        result_dir = os.path.join(app.root_path, "rule_2_결과")
+        holdings_path = os.path.join(result_dir, "holdings.csv")
+
+        cand_names = ["portfolio_summary.csv", "portfolio.csv"]
+        summary_path = None
+        for name in cand_names:
+            p = os.path.join(result_dir, name)
+            if os.path.exists(p):
+                summary_path = p
+                break
+
+        if not os.path.exists(holdings_path):
+            return "<h2>holdings.csv 파일이 존재하지 않습니다.</h2>"
+        if summary_path is None:
+            return "<h2>포트폴리오 요약 CSV 파일이 존재하지 않습니다.</h2>"
+
+        try:
+            df_h = pd.read_csv(holdings_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df_h = pd.read_csv(holdings_path, encoding="cp949")
+        df_h = df_h.fillna("")
+
+        for col in ["보유수량", "매입단가", "현재가"]:
+            if col in df_h.columns:
+                s = pd.to_numeric(df_h[col], errors="coerce")
+                df_h[col] = s.map(lambda x: f"{int(x):,}" if pd.notna(x) else "")
+
+        try:
+            df_s = pd.read_csv(summary_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df_s = pd.read_csv(summary_path, encoding="cp949")
+        df_s = df_s.fillna("")
+
+        for c in df_s.columns:
+            s = pd.to_numeric(df_s[c], errors="coerce")
+            if s.notna().any():
+                df_s[c] = s.map(lambda x: f"{int(x):,}" if pd.notna(x) and float(x).is_integer() else (f"{x:,.2f}" if pd.notna(x) else ""))
+
+        holdings_cols = df_h.columns.tolist()
+        holdings_rows = df_h.to_dict(orient="records")
+        summary_cols = df_s.columns.tolist()
+        summary_rows = df_s.to_dict(orient="records")
+
+        return render_template(
+            "portfolio.html",
+            holdings_cols=holdings_cols,
+            holdings_rows=holdings_rows,
+            summary_cols=summary_cols,
+            summary_rows=summary_rows
+        )
+    except Exception as e:
+        print(f"[ERROR] /portfolio 실패: {e}")
+        return f"<h2>/portfolio 로드 실패: {e}</h2>"
 
 #백테스트 페이지 라우트
 @app.route("/backtest")
 def backtest():
     # 그래프를 바로 생성하고 반환하는 API 호출
     return render_template("backtest.html")
-
-# 그래프를 동적으로 생성하고 HTTP 응답으로 반환
-@app.route("/generate-graph")
-def generate_backtest_graph():
-    # 예시 데이터로 그래프 생성 (적절한 백테스트 데이터를 사용해 그려야 합니다)
-    x = [0, 1, 2, 3, 4]
-    y = [0, 1, 4, 9, 16]
-
-    fig, ax = plt.subplots()
-    ax.plot(x, y, label='Growth over Time')
-    ax.set_title('Backtest Results')
-    ax.set_xlabel('Time')
-    ax.set_ylabel('Growth')
-
-    # 이미지를 메모리 버퍼에 저장
-    img_buf = io.BytesIO()
-    fig.savefig(img_buf, format='png')
-    img_buf.seek(0)
-    plt.close(fig)  # 메모리 해제
-
-    # 이미지를 HTTP 응답으로 전송
-    return Response(img_buf, mimetype='image/png')
 
 @app.route("/")
 def root():
