@@ -7,15 +7,47 @@ import pandas as pd
 from collections import defaultdict
 from datetime import datetime, time as dtime
 from pathlib import Path
-from config import ACCOUNT_INFO, get_api_keys
+import keyring
 
 # ───────────── 설정 ─────────────
+# 키링에서 불러오기. 최초에 키가 없다면 아래 DEFAULT_* 값으로 채워 넣는다.
+APP_USER = "최진혁"
+APP_KEY_SERVICE = "mock_app_key"
+APP_SECRET_SERVICE = "mock_app_secret"
+
+# 필요하다면 기본값으로 1회 세팅
+DEFAULT_APP_KEY = "PSbWOQW9CsjVIq8MwF3oeHG9gY9JjLHJVu8t"
+DEFAULT_APP_SECRET = (
+    "uzxSVMytr/jWcbCYMBGcRMloeCM9A1fiTOur3Y3j30RY6gtvf3G0Bn1y/"
+    "z6J2pa0CKKZRFf6OXpk/umYfxZaWQr4eVmoCJG6BX7wfQ/GOYlEDotyouzkMwevv7hjI06tzruSpPuN6EMS1nirtIeTnh8kxxN4LBS70XggdFevyM3KR87RG7k="
+)
+
+def _ensure_keyring():
+    # 실행 환경에 키가 없으면 기본값으로 1회 등록 (이미 있으면 건너뜀)
+    if keyring.get_password(APP_KEY_SERVICE, APP_USER) is None:
+        keyring.set_password(APP_KEY_SERVICE, APP_USER, DEFAULT_APP_KEY)
+    if keyring.get_password(APP_SECRET_SERVICE, APP_USER) is None:
+        keyring.set_password(APP_SECRET_SERVICE, APP_USER, DEFAULT_APP_SECRET)
+
+def get_api_keys():
+    """저장된 API 키를 불러오는 함수"""
+    _ensure_keyring()
+    app_key = keyring.get_password(APP_KEY_SERVICE, APP_USER)
+    app_secret = keyring.get_password(APP_SECRET_SERVICE, APP_USER)
+    return app_key, app_secret
+
+# 계좌 정보 (필요 시 수정)
+ACCOUNT_INFO = {
+    "CANO": "50139282",   # 계좌번호 앞 8자리
+    "ACNT_PRDT_CD": "01", # 계좌번호 뒤 2자리
+}
+
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MAX_BUY_BUDGET = 20_000_000    # 종목당 최대 매수 금액
 TOP_N_TO_BUY   = 5             # 오늘 후보 중 최대 N개 매수
-LOOP_SLEEP_SEC = 180           # 루프 대기 (초)
+LOOP_SLEEP_SEC = 300           # 루프 대기 (초)
 
 # 장 종료 시각(한국 주식): 15:30
 MARKET_CLOSE_TIME = dtime(15, 30)
@@ -518,10 +550,10 @@ def buy_candidates(holdings, buy_codes, loop_count, bought_today, not_tradable_t
 def sell_rules_for_all(holdings, streaks, loop_count, today_orders):
     """
     매도 규칙:
-    1) 손익률 < -1% 또는 > +1% : 시장가(01) 전량 매도
+    1) 수익률 < -1% 또는 > +2% : 시장가(01) 전량 매도
        → 단, '매도 미체결 잔량'을 제외한 '실매도 가능 수량(보유-미체결)'만 매도
-    2) 손익률이 0.5% ~ 1% 구간에 2루프 연속 존재 : 시장가(01) 위와 동일
-    3) 손익률이 0% ~ 0.5% 구간에 3루프 연속 존재 : 시장가(01) 위와 동일
+    2) 수익률이 1% ~ 2% 구간에 2루프 연속 존재 : 시장가(01) 위와 동일
+    3) 수익률이 0% ~ 1% 구간에 3루프 연속 존재 : 시장가(01) 위와 동일
     """
     print(f"[루프 {loop_count}] ▶ 매도 검사", flush=True)
     market_closed = False
@@ -550,7 +582,7 @@ def sell_rules_for_all(holdings, streaks, loop_count, today_orders):
         sellable_qty = max(0, int(qty) - int(open_sell_qty))
 
         # 규칙 1
-        if pnl_pct < -1 or pnl_pct > 1.0:
+        if pnl_pct < -1 or pnl_pct > 2.0:
             if sellable_qty <= 0:
                 print(f"    → 규칙1 충족이나 매도 가능 수량 0 (보유:{qty}, 매도미체결:{open_sell_qty}) ▶ 스킵", flush=True)
             else:
@@ -567,8 +599,8 @@ def sell_rules_for_all(holdings, streaks, loop_count, today_orders):
                 break
             continue
 
-        # 규칙 2 (0.5% ~ 1% 구간 2루프 연속)
-        if 0.5 < pnl_pct <= 1.0:
+        # 규칙 2 (1% ~ 2% 구간 2루프 연속)
+        if 1 < pnl_pct <= 2.0:
             streaks.setdefault(code, {"low":0, "mid":0})
             streaks[code]["mid"] += 1
         else:
@@ -589,8 +621,8 @@ def sell_rules_for_all(holdings, streaks, loop_count, today_orders):
                     break
             streaks[code]["mid"] = 0
 
-        # 규칙 3 (0% ~ 0.5% 구간 3루프 연속)
-        if 0.0 < pnl_pct <= 0.5:
+        # 규칙 3 (0% ~ 1% 구간 3루프 연속)
+        if 0.0 < pnl_pct <= 1:
             streaks.setdefault(code, {"low":0, "mid":0})
             streaks[code]["low"] += 1
         else:

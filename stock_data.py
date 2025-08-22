@@ -8,7 +8,16 @@ import time
 import FinanceDataReader as fdr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
-import config
+
+# ───────── DB 설정 ─────────
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "1234",
+    "port": 3306,
+    "database": "news_db",
+    "charset": "utf8mb4",
+}
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
@@ -16,7 +25,7 @@ start_date = today - datetime.timedelta(days=365 * 14)
 
 """ MySQL DB 연결 함수 """
 def get_connection():
-    return pymysql.connect(**config.DB_CONFIG)
+    return pymysql.connect(**DB_CONFIG)
 
 # 네이버 금융에서 사용할 필드 IDs 동적 추출 함수
 def fetch_field_ids(market_type):

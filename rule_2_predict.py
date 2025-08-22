@@ -15,7 +15,6 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from joblib import Parallel, delayed
 import multiprocessing as mp
 import hashlib, struct
-from config import DB_CONFIG
 
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
@@ -26,6 +25,16 @@ LEARNING_RATE = 0.0005
 EPOCHS = 20
 VAL_LOSS_THRESHOLD = 0.693
 PERCENT = 5
+
+# DB 설정
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "1234",
+    "port": 3306,
+    "database": "news_db",
+    "charset": "utf8mb4",
+}
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
@@ -226,7 +235,7 @@ def train_model(df_train, code=None, conf_percentile=PERCENT):
     # 시퀀스 및 레이블 생성
     X_seq, y = prepare_sequences(features, df_train['Close'].values)
     if len(y) < 100:
-        return None, scalers
+        return None, scalers, None, None
 
     # 2) train/val split (앞 70%: 학습, 뒤 30%: 검증) ---
     split_idx = int(len(y) * 0.7)
