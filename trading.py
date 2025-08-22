@@ -325,6 +325,62 @@ def has_open_orders(today_orders):
 
     return False
 
+# ───────────── 종목별 '매도 미체결 잔량' 계산 ─────────────
+def get_open_sell_qty_for_code(today_orders, code: str) -> int:
+    """
+    당일 주문/체결 내역(today_orders)에서 특정 종목(code)의 '매도' 미체결 잔량 합계를 반환.
+    - 상태가 거절/취소/오류 등 '종료'에 해당하면 제외
+    - 잔량 필드는 rmn_qty 또는 unerc_qty 를 우선 사용
+    - 보정: (주문수량 - 체결수량) 차이가 더 크면 그 값을 사용
+    """
+    code = str(code).zfill(6)
+
+    def _text(o, *keys):
+        for k in keys:
+            v = o.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return ""
+
+    terminal_keywords = [
+        "거부", "불가", "매매불가", "주문거절", "취소", "정정거부", "오류",
+        "rejected", "reject", "cancel", "canceled", "cancelled", "error", "invalid"
+    ]
+
+    open_qty = 0
+    for o in today_orders or []:
+        pdno = str(o.get("pdno", "")).zfill(6)
+        if pdno != code:
+            continue
+
+        # 매도 여부 판별
+        side_txt = (o.get("sll_buy_dvsn_cd") or o.get("sll_buy_dvsn_name") or o.get("trad_dvsn_name") or "").strip()
+        is_sell = ("매도" in side_txt) or (str(side_txt) in ("01", "1"))
+        if not is_sell:
+            continue
+
+        # 종료 상태는 제외
+        st = _text(o, "ordr_sttus_name", "ccld_dvsn_name", "ord_sttus")
+        st_lower = st.lower()
+        if any(k in st for k in terminal_keywords) or any(k in st_lower for k in terminal_keywords):
+            continue
+
+        # 미체결 잔량
+        rmn = _num0(o.get("rmn_qty")) or _num0(o.get("unerc_qty"))
+        if rmn > 0:
+            open_qty += int(rmn)
+
+        # 보정: 주문수량 - 체결수량
+        ord_qty   = _num0(o.get("ord_qty"))
+        ccld_qty1 = _num0(o.get("tot_ccld_qty"))
+        ccld_qty2 = _num0(o.get("ccld_qty"))
+        ccld_qty  = max(ccld_qty1, ccld_qty2)
+        gap = max(0, int(round(ord_qty - ccld_qty)))
+        if gap > open_qty:
+            open_qty = gap
+
+    return int(open_qty)
+
 # ───────────── 오늘 매수/매매불가 이력 저장/복원 ─────────────
 def load_bought_today(today_str):
     try:
@@ -459,12 +515,13 @@ def buy_candidates(holdings, buy_codes, loop_count, bought_today, not_tradable_t
 
     return market_closed
 
-def sell_rules_for_all(holdings, streaks, loop_count):
+def sell_rules_for_all(holdings, streaks, loop_count, today_orders):
     """
     매도 규칙:
     1) 손익률 < -1% 또는 > +1% : 시장가(01) 전량 매도
-    2) 손익률이 0.5% ~ 1% 구간에 2루프 연속 존재 : 시장가(01) 전량 매도
-    3) 손익률이 0% ~ 0.5% 구간에 3루프 연속 존재 : 시장가(01) 전량 매도
+       → 단, '매도 미체결 잔량'을 제외한 '실매도 가능 수량(보유-미체결)'만 매도
+    2) 손익률이 0.5% ~ 1% 구간에 2루프 연속 존재 : 시장가(01) 위와 동일
+    3) 손익률이 0% ~ 0.5% 구간에 3루프 연속 존재 : 시장가(01) 위와 동일
     """
     print(f"[루프 {loop_count}] ▶ 매도 검사", flush=True)
     market_closed = False
@@ -488,16 +545,23 @@ def sell_rules_for_all(holdings, streaks, loop_count):
         pnl_pct = (cur - avg) / avg * 100.0
         print(f"  • {code} 현재가:{cur} 평균가:{avg} 수익률:{pnl_pct:.2f}%", flush=True)
 
+        # 공통: 현재 '매도 미체결 잔량' 조회 후, 실제 매도 가능 수량 계산
+        open_sell_qty = get_open_sell_qty_for_code(today_orders, code)
+        sellable_qty = max(0, int(qty) - int(open_sell_qty))
+
         # 규칙 1
         if pnl_pct < -1 or pnl_pct > 1.0:
-            print(f"    → 규칙1 충족: {pnl_pct:.2f}% ▶ 시장가 전량 매도", flush=True)
-            result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
-            msg = (result.get("msg1") or "").strip()
-            log_trade(datetime.now(), code, cur, qty, "매도(규칙1)", result)
-            print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
-            if is_market_closed_msg(msg):
-                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
-                market_closed = True
+            if sellable_qty <= 0:
+                print(f"    → 규칙1 충족이나 매도 가능 수량 0 (보유:{qty}, 매도미체결:{open_sell_qty}) ▶ 스킵", flush=True)
+            else:
+                print(f"    → 규칙1 충족: {pnl_pct:.2f}% ▶ 시장가 매도 sellable={sellable_qty} (보유:{qty}, 미체결:{open_sell_qty})", flush=True)
+                result = send_order(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
+                msg = (result.get("msg1") or "").strip()
+                log_trade(datetime.now(), code, cur, sellable_qty, "매도(규칙1)", result)
+                print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
+                if is_market_closed_msg(msg):
+                    print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
+                    market_closed = True
             streaks[code] = {"low":0, "mid":0}
             if market_closed:
                 break
@@ -511,15 +575,18 @@ def sell_rules_for_all(holdings, streaks, loop_count):
             if code in streaks: streaks[code]["mid"] = 0
 
         if streaks.get(code, {}).get("mid", 0) >= 2:
-            print(f"    → 규칙2 충족 ▶ 시장가 전량 매도", flush=True)
-            result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
-            msg = (result.get("msg1") or "").strip()
-            log_trade(datetime.now(), code, cur, qty, "매도(규칙2)", result)
-            print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
-            if is_market_closed_msg(msg):
-                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
-                market_closed = True
-                break
+            if sellable_qty <= 0:
+                print(f"    → 규칙2 충족이나 매도 가능 수량 0 (보유:{qty}, 매도미체결:{open_sell_qty}) ▶ 스킵", flush=True)
+            else:
+                print(f"    → 규칙2 충족 ▶ 시장가 매도 sellable={sellable_qty} (보유:{qty}, 미체결:{open_sell_qty})", flush=True)
+                result = send_order(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
+                msg = (result.get("msg1") or "").strip()
+                log_trade(datetime.now(), code, cur, sellable_qty, "매도(규칙2)", result)
+                print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
+                if is_market_closed_msg(msg):
+                    print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
+                    market_closed = True
+                    break
             streaks[code]["mid"] = 0
 
         # 규칙 3 (0% ~ 0.5% 구간 3루프 연속)
@@ -530,15 +597,18 @@ def sell_rules_for_all(holdings, streaks, loop_count):
             if code in streaks: streaks[code]["low"] = 0
 
         if streaks.get(code, {}).get("low", 0) >= 3:
-            print(f"    → 규칙3 충족 ▶ 시장가 전량 매도", flush=True)
-            result = send_order(code, 0, qty, order_type="매도", ord_dvsn="01")
-            msg = (result.get("msg1") or "").strip()
-            log_trade(datetime.now(), code, cur, qty, "매도(규칙3)", result)
-            print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
-            if is_market_closed_msg(msg):
-                print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
-                market_closed = True
-                break
+            if sellable_qty <= 0:
+                print(f"    → 규칙3 충족이나 매도 가능 수량 0 (보유:{qty}, 매도미체결:{open_sell_qty}) ▶ 스킵", flush=True)
+            else:
+                print(f"    → 규칙3 충족 ▶ 시장가 매도 sellable={sellable_qty} (보유:{qty}, 미체결:{open_sell_qty})", flush=True)
+                result = send_order(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
+                msg = (result.get("msg1") or "").strip()
+                log_trade(datetime.now(), code, cur, sellable_qty, "매도(규칙3)", result)
+                print(f"      결과: {result.get('rt_cd')} {msg}", flush=True)
+                if is_market_closed_msg(msg):
+                    print("⛔ 시장 종료 감지 → 루프 종료 예정", flush=True)
+                    market_closed = True
+                    break
             streaks[code]["low"] = 0
 
     return market_closed
@@ -705,9 +775,9 @@ if __name__ == "__main__":
                 print("✅ 시장 종료 감지 → 루프 즉시 종료", flush=True)
                 break
 
-            # 2) 매도 규칙: 전 종목 대상 01
+            # 2) 매도 규칙: 전 종목 대상 01  (※ 매도 미체결 반영)
             holdings = get_all_holdings()  # 방금 매수 반영
-            market_closed = sell_rules_for_all(holdings, streaks, loop_count)
+            market_closed = sell_rules_for_all(holdings, streaks, loop_count, today_orders)
             if market_closed:
                 print("✅ 시장 종료 감지 → 루프 즉시 종료", flush=True)
                 break
