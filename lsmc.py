@@ -292,7 +292,7 @@ if __name__ == "__main__":
             # 2. 기대수익 상위 10개만 추출
             results_sorted = sorted(results, key=lambda x: x['expected_profit'], reverse=True)[:10]
 
-            # 3. 기대수익 상위 10개에 대해서만 매매 로직
+            # 3. 기대수익 상위 10개에 대해서만 매매 로직 (optimal_qty 계산 포함)
             for result in results_sorted:
                 rr = result['rr_ratio']
                 if rr_total > 0 and rr > 0 and result['expected_loss'] > 0:
@@ -306,6 +306,35 @@ if __name__ == "__main__":
                     result['optimal_qty'] = 0
                 print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} 기대수익:{result['expected_profit']:.2f} Qty:{result['optimal_qty']}", flush=True)
 
+            # ✅ 3.5 상위 10개 종목 통계 CSV 저장 (요청 기능)
+            try:
+                timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                csv_path = os.path.join(OUTPUT_DIR, f"candidates_stats_{timestamp_str}.csv")
+                latest_csv_path = os.path.join(OUTPUT_DIR, "latest_candidates_stats.csv")
+                export_rows = []
+                for r in results_sorted:
+                    export_rows.append({
+                        '종목코드': r['code'],
+                        '현재가': int(r['price']),
+                        '기대수익': round(float(r['expected_profit']), 2),
+                        '예상손실': round(float(r['expected_loss']), 2),
+                        '손익비': round(float(r['rr_ratio']), 2),
+                        '상승확률(%)': round(float(r['prob_up']) * 100, 2),
+                        '권장수량': int(r.get('optimal_qty', 0)),
+                        '루프': loop_count,
+                        '타임스탬프': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    })
+                if export_rows:
+                    df_stats = pd.DataFrame(export_rows)
+                    df_stats.to_csv(csv_path, index=False, encoding='utf-8-sig')
+                    df_stats.to_csv(latest_csv_path, index=False, encoding='utf-8-sig')
+                    print(f"📄 후보 통계 CSV 저장 완료: {csv_path}", flush=True)
+                else:
+                    print("⚠️ 저장할 후보 통계가 없습니다.", flush=True)
+            except Exception as e:
+                print(f"CSV 저장 중 오류: {e}", flush=True)
+
+            # 4. 주문 실행
             for result in results_sorted:
                 stock_code = result['code']
                 price = result['price']
@@ -318,7 +347,7 @@ if __name__ == "__main__":
                         order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
                         print(f"✅ 추가 매수 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], rr, add_qty, "매수", order_result)
+                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'], add_qty, "매수", order_result)
                         if order_result.get("rt_cd") == "0":
                             if stock_code in portfolio:
                                 portfolio[stock_code]['qty'] += add_qty
@@ -331,7 +360,7 @@ if __name__ == "__main__":
                         order_result = send_order(stock_code, price, qty=sell_qty, order_type="매도")
                         print(f"부분 매도 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], rr, sell_qty, "매도", order_result)
+                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'], sell_qty, "매도", order_result)
                         if order_result.get("rt_cd") == "0":
                             portfolio[stock_code]['qty'] -= sell_qty
                             if portfolio[stock_code]['qty'] <= 0:
