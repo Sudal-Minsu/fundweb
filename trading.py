@@ -64,24 +64,55 @@ DB_CONFIG = {
     "charset": "utf8mb4"
 }
 
-# ───────────── 인증 ─────────────
-app_key, app_secret = get_api_keys()
-url_base = "https://openapivts.koreainvestment.com:29443"  # 모의투자 VTS
+# ───────────── 세션/인증 상태 (import 시 실행되지 않도록 분리) ─────────────
+SESSION = {
+    "url_base": "https://openapivts.koreainvestment.com:29443",  # 모의투자 VTS
+    "app_key": None,
+    "app_secret": None,
+    "access_token": None,
+    "inited": False,
+}
 
-res = requests.post(
-    f"{url_base}/oauth2/tokenP",
-    headers={"content-type": "application/json"},
-    data=json.dumps({
-        "grant_type": "client_credentials",
-        "appkey": app_key,
-        "appsecret": app_secret
-    })
-)
-access_token = res.json().get("access_token", "")
-if not access_token:
-    print("❌ 액세스 토큰 발급 실패:", res.text, flush=True)
-    sys.exit()
-print("🔑 액세스 토큰 OK", flush=True)
+def init_session(app_key=None, app_secret=None, url_base=None):
+    """
+    인증/세션 초기화. import 시 자동으로 실행되지 않으며,
+    main() 또는 외부에서 명시적으로 호출하거나 ensure_session()이 필요 시 호출합니다.
+    """
+    if url_base:
+        SESSION["url_base"] = url_base
+
+    if not app_key or not app_secret:
+        app_key, app_secret = get_api_keys()
+
+    # 토큰 발급
+    res = requests.post(
+        f"{SESSION['url_base']}/oauth2/tokenP",
+        headers={"content-type": "application/json"},
+        data=json.dumps({
+            "grant_type": "client_credentials",
+            "appkey": app_key,
+            "appsecret": app_secret
+        })
+    )
+    access_token = res.json().get("access_token", "")
+    if not access_token:
+        raise RuntimeError(f"❌ 액세스 토큰 발급 실패: {res.text}")
+
+    SESSION["app_key"] = app_key
+    SESSION["app_secret"] = app_secret
+    SESSION["access_token"] = access_token
+    SESSION["inited"] = True
+    print("🔑 액세스 토큰 OK", flush=True)
+
+def is_session_ready():
+    return SESSION.get("inited") and bool(SESSION.get("access_token"))
+
+def ensure_session():
+    """
+    세션이 없으면 즉시 초기화. 외부에서 함수 단독 호출할 때도 안전하게 사용 가능.
+    """
+    if not is_session_ready():
+        init_session()
 
 # ───────────── 유틸 ─────────────
 def _num(x):
@@ -292,20 +323,26 @@ def build_prev_trading_value_map(codes):
 
 # ───────────── 시세/주문 ─────────────
 def get_quote(stock_code):
+    ensure_session()
     throttle_reads()
-    url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-price"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/quotations/inquire-price"
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": "FHKST01010100"
     }
     params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": stock_code}
     res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
-    if res.status_code != 200 or 'output' not in res.json():
+    try:
+        j = res.json()
+    except:
         print(f"❌ 시세 조회 실패: {stock_code} / {res.text}", flush=True)
         return None, None, None
-    out = res.json()['output']
+    if res.status_code != 200 or 'output' not in j:
+        print(f"❌ 시세 조회 실패: {stock_code} / {res.text}", flush=True)
+        return None, None, None
+    out = j['output']
     to_int = lambda x: int(str(x).replace(",", "").strip()) if x not in (None, "") else None
     cur  = to_int(out.get('stck_prpr'))
     ask1 = to_int(out.get('askp1') or out.get('askp'))
@@ -316,17 +353,22 @@ def get_current_price(stock_code):
     cur, _, _ = get_quote(stock_code); return cur
 
 def get_hashkey(data):
-    url = f"{url_base}/uapi/hashkey"
-    headers = {"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret}
+    ensure_session()
+    url = f"{SESSION['url_base']}/uapi/hashkey"
+    headers = {"Content-Type": "application/json", "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"]}
     res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.2)
-    return res.json().get("HASH", "")
+    try:
+        return res.json().get("HASH", "")
+    except:
+        return ""
 
 def send_order(stock_code, price, qty, order_type="매수", ord_dvsn="00"):
     """
     - 매수: 04(최우선지정가) → ORD_UNPR=0
     - 매도: 01(시장가)      → ORD_UNPR=0
     """
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
+    ensure_session()
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/order-cash"
     tr_id = "VTTC0802U" if order_type == "매수" else "VTTC0801U"
 
     price_free_types = {"01","03","04","11","12","13","14","15","16"}
@@ -338,8 +380,8 @@ def send_order(stock_code, price, qty, order_type="매수", ord_dvsn="00"):
     }
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": tr_id, "hashkey": get_hashkey(data)
     }
     res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.2)
@@ -348,7 +390,8 @@ def send_order(stock_code, price, qty, order_type="매수", ord_dvsn="00"):
 
 # ───────────── 정정/취소 ─────────────
 def send_cancel_order(ord_orgno, orgn_odno, ord_dvsn, qty_all=True, qty=0):
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+    ensure_session()
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/order-rvsecncl"
     tr_id = "VTTC0803U"  # 모의: VTTC0803U
     params = {
         "CANO": ACCOUNT_INFO["CANO"], "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
@@ -360,8 +403,8 @@ def send_cancel_order(ord_orgno, orgn_odno, ord_dvsn, qty_all=True, qty=0):
     }
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": tr_id, "hashkey": get_hashkey(params),
     }
     res = requests.post(url, headers=headers, data=json.dumps(params)); time.sleep(1.2)
@@ -369,16 +412,17 @@ def send_cancel_order(ord_orgno, orgn_odno, ord_dvsn, qty_all=True, qty=0):
     except: return {"rt_cd": "-1", "msg1": res.text}
 
 def list_cancelable_buy_orders():
+    ensure_session()
     throttle_reads()
     """
     1차: 정정/취소 가능 주문 조회 (환경에 따라 비어 나올 수 있음)
     """
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
     tr_id = "VTTC8036R"  # 모의: VTTC8036R
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": tr_id,
     }
 
@@ -434,19 +478,20 @@ def list_cancelable_buy_orders():
 
 # ───────────── 조회 ─────────────
 def get_all_holdings():
+    ensure_session()
     throttle_reads()
     """
     주식잔고조회 (연속조회 포함)
     - API가 1페이지당 최대 20건 반환하므로, tr_cont/ctx 키로 모든 페이지 수집
     - 모의투자 tr_id: VTTC8434R (실계좌는 TTTC8434R)
     """
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-balance"
 
     headers_base = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key,
-        "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"],
+        "appSecret": SESSION["app_secret"],
         "tr_id": "VTTC8434R",
     }
 
@@ -505,12 +550,13 @@ def get_all_holdings():
     return merged
 
 def get_today_orders():
+    ensure_session()
     throttle_reads()
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": "VTTC0081R",
     }
     today = datetime.now().strftime("%Y%m%d")
@@ -626,17 +672,18 @@ def calc_pnl_pct(avg, cur):
 INQUIRE_PSBL_TR_ID = "VTTC8908R"  # 모의투자용. 실계좌는 "TTTC8908R"로 교체
 
 def inquire_psbl_order(stock_code, price, ord_dvsn="04", include_cma="Y", include_ovrs="N"):
+    ensure_session()
     throttle_reads()
     """
     /uapi/domestic-stock/v1/trading/inquire-psbl-order
     반환: { rt_cd, msg, nrcvb_buy_qty }
     """
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key,
-        "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"],
+        "appSecret": SESSION["app_secret"],
         "tr_id": INQUIRE_PSBL_TR_ID,
     }
     params = {
@@ -715,12 +762,13 @@ INITIAL_CAPITAL = 100_000_000  # 초기자본 1억
 INITIAL_TOT_EVAL = None        # 시작 기준 총평가금액(참고용)
 
 def get_account_summary():
+    ensure_session()
     throttle_reads()
-    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-balance"
     headers = {
         "Content-Type": "application/json",
-        "authorization": f"Bearer {access_token}",
-        "appKey": app_key, "appSecret": app_secret,
+        "authorization": f"Bearer {SESSION['access_token']}",
+        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": "VTTC8434R",
         "Cache-Control": "no-cache", "Pragma": "no-cache",
     }
@@ -945,7 +993,18 @@ def save_not_tradable(today_str, codes_set):
     except: pass
 
 # ───────────── 메인 ─────────────
-if __name__ == "__main__":
+def main():
+    """
+    원래 __main__ 블록의 전체 실행 루프를 함수로 캡슐화.
+    외부에서 import 후 main()을 호출해 동작시킬 수 있음.
+    """
+    # 세션 초기화
+    try:
+        init_session()
+    except Exception as e:
+        print(str(e), flush=True)
+        sys.exit(1)
+
     buy_list_path = os.path.join(OUTPUT_DIR, "buy_list.csv")
     if not os.path.exists(buy_list_path):
         print("❌ buy_list.csv 없음", flush=True); sys.exit()
@@ -969,6 +1028,7 @@ if __name__ == "__main__":
     prev_tv_map = build_prev_trading_value_map(today_candidates)
 
     # 시작 기준 총평가금액 (참고용)
+    global INITIAL_TOT_EVAL
     try:
         summary0 = get_account_summary()
         INITIAL_TOT_EVAL = _num0(summary0.get("tot_evlu_amt"))
@@ -1143,3 +1203,7 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         print("\n⏹ 사용자 중단", flush=True)
+
+# 모듈로 import 시 자동 실행되지 않도록 보호
+if __name__ == "__main__":
+    main()
