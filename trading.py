@@ -170,22 +170,13 @@ def send_cancel_order_throttled(*, ord_orgno, orgn_odno, ord_dvsn, qty_all=True,
     _last_cancel_ts = time.monotonic()
     return send_cancel_order(ord_orgno=ord_orgno, orgn_odno=orgn_odno, ord_dvsn=ord_dvsn, qty_all=qty_all, qty=qty)
 
-# ───────────── 슬립 헬퍼: 15:00 보장 + 크리티컬 타임 보장 ─────────────
-def sleep_until_3pm_or(default_sec: int):
-    """
-    기본 슬립(default_sec) 하되, 오늘 15:00을 절대 넘기지 않도록 절단.
-    """
-    now = datetime.now()
-    target = datetime.combine(now.date(), dtime(15, 0))
-    remain = max(0.0, (target - now).total_seconds())
-    time.sleep(max(0.2, min(default_sec, remain - 0.3)))  # 0.3초 여유
-
+# ───────────── 스마트 슬립 ─────────────
 CRITICALS = [CANCEL_BUY_START_TIME, dtime(14, 57), FORCE_SELL_TIME, MARKET_CLOSE_TIME]
 
 def smart_sleep(default_sec: int):
     """
     다음 크리티컬 시각(14:55/14:57/15:00/15:30) 이전까지만 수면.
-    내부적으로도 15:00 절단을 한 번 더 보장.
+    15:00 가드는 '15:00 이전'에만 적용 → 15:00 이후에는 기본 슬립(default_sec) 보장.
     """
     now = datetime.now()
     remains = []
@@ -194,14 +185,18 @@ def smart_sleep(default_sec: int):
         if tgt <= now:
             continue
         remains.append((tgt - now).total_seconds())
+
+    # 다음 크리티컬까지 남은 시간으로 1차 제한
     limit = min(remains) if remains else default_sec
     planned = max(0.2, min(default_sec, limit - 0.3))
-    # 15:00 가드까지 겹쳐서 보장
-    now2 = datetime.now()
-    target_3pm = datetime.combine(now2.date(), dtime(15, 0))
-    remain_3pm = max(0.0, (target_3pm - now2).total_seconds())
-    final_sleep = max(0.2, min(planned, remain_3pm - 0.3))
-    time.sleep(final_sleep)
+
+    # 15:00 가드는 15:00 '이전'에만 적용
+    if now.time() < dtime(15, 0):
+        target_3pm = datetime.combine(now.date(), dtime(15, 0))
+        remain_3pm = max(0.0, (target_3pm - now).total_seconds())
+        planned = max(0.2, min(planned, remain_3pm - 0.3))
+
+    time.sleep(planned)
 
 # ───────────── ATR14% 계산용 DB 접근 ─────────────
 def fetch_ohlc_for_codes_from_db(codes, rows_per_code=20):
