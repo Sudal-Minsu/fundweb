@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os
 import sys
 import time
@@ -9,12 +11,48 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
-from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
 
+# ─────────────────────────────────────────────
+# [개인 설정/보안] 기존 config.py 내용을 내장
+# ─────────────────────────────────────────────
 
-# ───────────── 설정 ─────────────
+# MySQL 연결 설정 (현재 스크립트에선 직접 사용 안 하지만 향후 확장 대비 포함)
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "1234",
+    "database": "news_db",
+    "port": 3306,
+    "charset": "utf8mb4"
+}
+
+# 🔐 키링에 앱키/시크릿 저장 (최초 1회 수행 후 주석 처리 권장)
+keyring.set_password('mock_app_key', '진상원', 'PSvNMEEXvFUo3DRIpE4L3bYOoV7JKDda3Y5Y')
+keyring.set_password('mock_app_secret', '진상원', 'NB7Vh7GDYaIyAmOqO7xSLz/HapmFZ16XMG5+trpXH14d4j2BI1+56nC2Nde8kxTTB1QU1bHxnXOoryYzt/2X1bOmWj3I0EZvUhdJi1TvxUAN3YE5fSDhUDWatUvU8khlp9funqeysPsSTwnGTndYT1l0o+kPeQAlehp2qj+uCocSO/GfF5w=')
+
+def get_api_keys():
+    """키링에서 API 키를 불러옴"""
+    app_key = keyring.get_password('mock_app_key', '진상원')
+    app_secret = keyring.get_password('mock_app_secret', '진상원')
+    return app_key, app_secret
+
+# 계좌 정보
+ACCOUNT_INFO = {
+    "CANO": "50141972",   # 계좌번호 앞 8자리
+    "ACNT_PRDT_CD": "01"  # 계좌번호 뒤 2자리
+}
+
+# ─────────────────────────────────────────────
+# [전략/실행 설정]
+# ─────────────────────────────────────────────
+
+# 분석/그래프 등은 기존 폴더 유지
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# 매매 로그 전용 폴더(요청사항)
+LOG_DIR = "full_kelly_결과"
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # 총 매수 예산(이번 루프에서 전체 후보에 배분할 총액)
 TOTAL_BUY_BUDGET_ALL = 100_000_000   # 1억 (필요 시 조정)
@@ -181,7 +219,8 @@ def save_portfolio(data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ───────────── 로깅 ─────────────
-LOG_FILE = Path("trade_log.csv")
+# ⬇️ 매매 로그를 full_kelly_결과 폴더에 저장
+LOG_FILE = Path(LOG_DIR) / "trade_log.csv"
 
 def log_trade(timestamp, stock_code, price, p, R, fstar, qty, order_type, order_result):
     log_entry = {
@@ -258,7 +297,6 @@ def check_takeprofit_stoploss(portfolio: dict):
 # ───────────── 켈리 계산 핵심 ─────────────
 def extract_prob_from_row(row: dict) -> float:
     """buy_list.csv 한 행에서 상승확률 p를 추출(여러 컬럼명 대응). 0~1 스케일 반환."""
-    # 가능한 후보 키(대소문자 무시)
     keys = ["prob_up", "p", "prob", "상승확률", "확률"]
     for k in row.keys():
         lk = str(k).lower()
@@ -272,8 +310,7 @@ def extract_prob_from_row(row: dict) -> float:
                     return max(0.0, min(1.0, p))
                 except Exception:
                     pass
-    # 기본값(보수/공격 중 선택). 모의투자용이라면 0.55 정도를 기본으로 둘 수도 있음.
-    return 0.55
+    return 0.55  # 기본값
 
 def compute_kelly_fraction(p: float, R: float) -> float:
     q = 1.0 - p

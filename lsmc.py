@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+auto_pipeline_single.py
+- config.py 내용(키링/계좌/DB 설정)까지 통합한 단일 실행 스크립트
+"""
+
 import os
 import sys
 import time
@@ -9,19 +15,47 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
-from config import DB_CONFIG, ACCOUNT_INFO, get_api_keys
 
+# ───────────── config.py 통합 (보안 정보 포함) ─────────────
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "1234",
+    "database": "news_db",
+    "port": 3306,
+    "charset": "utf8mb4"
+}
+
+# 🔐 최초 1회만 실행 후 주석 처리 권장
+keyring.set_password('mock_app_key', '진상원', 'PSvNMEEXvFUo3DRIpE4L3bYOoV7JKDda3Y5Y')
+keyring.set_password('mock_app_secret', '진상원', 'NB7Vh7GDYaIyAmOqO7xSLz/HapmFZ16XMG5+trpXH14d4j2BI1+56nC2Nde8kxTTB1QU1bHxnXOoryYzt/2X1bOmWj3I0EZvUhdJi1TvxUAN3YE5fSDhUDWatUvU8khlp9funqeysPsSTwnGTndYT1l0o+kPeQAlehp2qj+uCocSO/GfF5w=')
+
+def get_api_keys():
+    """저장된 API 키를 불러오는 함수"""
+    app_key = keyring.get_password('mock_app_key', '진상원')
+    app_secret = keyring.get_password('mock_app_secret', '진상원')
+    return app_key, app_secret
+
+# 계좌 정보
+ACCOUNT_INFO = {
+    "CANO": "50141972",   # 계좌번호 앞 8자리
+    "ACNT_PRDT_CD": "01"  # 계좌번호 뒤 2자리
+}
 
 # ───────────── 설정 ─────────────
-OUTPUT_DIR = "rule_2_결과"
+OUTPUT_DIR = "lsmc_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-TOTAL_RISK_BUDGET_ALL = 5_000_000_00
-MAX_BUY_BUDGET = 10_000_000
+TOTAL_RISK_BUDGET_ALL = 5_000_000_00   # 전체 리스크 예산
+MAX_BUY_BUDGET = 10_000_000            # 종목당 최대 매수 예산
+
+# ✅ 매매 로그를 출력 폴더에 저장
+LOG_FILE = Path(OUTPUT_DIR) / "trade_log.csv"
+
 app_key, app_secret = get_api_keys()
 url_base = "https://openapivts.koreainvestment.com:29443"
 
-def adjust_price_to_tick(price):
+def adjust_price_to_tick(price: int) -> int:
     if price < 1000:
         tick = 1
     elif price < 5000:
@@ -36,22 +70,25 @@ def adjust_price_to_tick(price):
         tick = 500
     else:
         tick = 1000
-    return price - (price % tick)
+    return int(price - (price % tick))
 
 # ───────────── 토큰 발급 ─────────────
-res = requests.post(f"{url_base}/oauth2/tokenP",
-                    headers={"content-type": "application/json"},
-                    data=json.dumps({
-                        "grant_type": "client_credentials",
-                        "appkey": app_key,
-                        "appsecret": app_secret
-                    }))
+res = requests.post(
+    f"{url_base}/oauth2/tokenP",
+    headers={"content-type": "application/json"},
+    data=json.dumps({
+        "grant_type": "client_credentials",
+        "appkey": app_key,
+        "appsecret": app_secret
+    })
+)
 access_token = res.json().get("access_token", "")
 if not access_token:
     print("❌ 액세스 토큰 발급 실패:", res.json(), flush=True)
     sys.exit()
 print(f"액세스 토큰: {access_token}\n", flush=True)
 
+# ───────────── 데이터/주문 API ─────────────
 def get_historical_prices_api(stock_code, start_date="20220101", end_date="20240101"):
     url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-daily-price"
     headers = {
@@ -135,20 +172,23 @@ def get_real_balance_qty(stock_code):
         return 0
     for item in res.json()['output1']:
         if item['pdno'] == stock_code:
-            return int(item['hldg_qty'])
+            try:
+                return int(item['hldg_qty'])
+            except Exception:
+                return 0
     return 0
 
 def send_order(stock_code, price, qty, order_type="매수"):
     url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
     tr_id = "VTTC0802U" if order_type == "매수" else "VTTC0801U"
-    adjusted_price = adjust_price_to_tick(price)
+    adjusted_price = adjust_price_to_tick(int(price))
     data = {
         "CANO": ACCOUNT_INFO["CANO"],
         "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
         "PDNO": stock_code,
         "ORD_DVSN": "00",
-        "ORD_QTY": str(qty),
-        "ORD_UNPR": str(adjusted_price)
+        "ORD_QTY": str(int(qty)),
+        "ORD_UNPR": str(int(adjusted_price))
     }
     hashkey = get_hashkey(data)
     headers = {
@@ -162,8 +202,12 @@ def send_order(stock_code, price, qty, order_type="매수"):
     time.sleep(1.2)
     res = requests.post(url, headers=headers, data=json.dumps(data))
     time.sleep(1.2)
-    return res.json()
+    try:
+        return res.json()
+    except Exception:
+        return {"rt_cd": "-1", "msg1": "INVALID_JSON"}
 
+# ───────────── 포트폴리오/로그 ─────────────
 def load_portfolio():
     path = Path("portfolio.json")
     if path.exists():
@@ -215,10 +259,10 @@ def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
     simulated = simulate_future_prices(current_price, past_returns=returns)
     max_profits = np.maximum(simulated.max(axis=1) - current_price, 0)
     max_losses = np.maximum(current_price - simulated.min(axis=1), 0)
-    expected_profit = np.mean(max_profits)
-    expected_loss = np.mean(max_losses)
-    rr_ratio = expected_profit / expected_loss if expected_loss > 0 else 0
-    prob_up = np.mean(max_profits > 0)
+    expected_profit = float(np.mean(max_profits))
+    expected_loss = float(np.mean(max_losses))
+    rr_ratio = expected_profit / expected_loss if expected_loss > 0 else 0.0
+    prob_up = float(np.mean(max_profits > 0))
     return {
         'expected_profit': expected_profit,
         'expected_loss': expected_loss,
@@ -227,26 +271,27 @@ def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
     }
 
 def log_trade(timestamp, stock_code, price, prob_up, exp_profit, exp_loss, rr_ratio, qty, order_type, order_result):
-    log_file = Path("trade_log.csv")
+    # ⬇️ LOG_FILE 전역 경로 사용 (lsmc_결과/trade_log.csv)
     log_entry = {
         "거래시간": timestamp,
         "종목코드": stock_code,
-        "현재가": price,
-        "상증확률(%)": round(prob_up * 100, 2),
-        "기대수익": round(exp_profit, 2),
-        "예상손실": round(exp_loss, 2),
-        "손익비": round(rr_ratio, 2),
-        "주문수량": qty,
+        "현재가": int(price),
+        "상승확률(%)": round(float(prob_up) * 100, 2),
+        "기대수익": round(float(exp_profit), 2),
+        "예상손실": round(float(exp_loss), 2),
+        "손익비": round(float(rr_ratio), 2),
+        "주문수량": int(qty),
         "주문종류": order_type,
         "주문결과": order_result.get("msg1", "NO_RESPONSE")
     }
-    if log_file.exists():
-        df = pd.read_csv(log_file)
+    if LOG_FILE.exists():
+        df = pd.read_csv(LOG_FILE)
         df = pd.concat([df, pd.DataFrame([log_entry])], ignore_index=True)
     else:
         df = pd.DataFrame([log_entry])
-    df.to_csv(log_file, index=False, encoding='utf-8-sig')
+    df.to_csv(LOG_FILE, index=False, encoding='utf-8-sig')
 
+# ───────────── 실행 ─────────────
 if __name__ == "__main__":
     print("📊 buy_list.csv에서 매수 후보 불러오는 중...", flush=True)
     buy_list_path = os.path.join(OUTPUT_DIR, "buy_list.csv")
@@ -268,15 +313,15 @@ if __name__ == "__main__":
     try:
         while True:
             print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
-            
+
             # 비후보 종목 전략 매도
             wait_until_all_non_candidate_sold(portfolio, current_buy_codes)
             save_portfolio(portfolio)
 
             results = []
-            rr_total = 0
+            rr_total = 0.0
 
-            # 1. 전체 후보에 대해 기대수익 등 시뮬레이션
+            # 1) 전체 후보에 대해 기대수익 등 시뮬레이션
             for candidate in top_candidates:
                 stock_code = candidate['종목코드']
                 print(f"종목 코드: {stock_code}", flush=True)
@@ -289,16 +334,17 @@ if __name__ == "__main__":
                 result.update({'code': stock_code, 'price': price})
                 results.append(result)
 
-            # 2. 기대수익 상위 10개만 추출
+            # 2) 기대수익 상위 10개만 추출
             results_sorted = sorted(results, key=lambda x: x['expected_profit'], reverse=True)[:10]
 
-            # 3. 기대수익 상위 10개에 대해서만 매매 로직 (optimal_qty 계산 포함)
+            # 3) 상위 10개 매매 로직 (optimal_qty 계산)
             for result in results_sorted:
                 rr = result['rr_ratio']
                 if rr_total > 0 and rr > 0 and result['expected_loss'] > 0:
                     max_loss_allowed = TOTAL_RISK_BUDGET_ALL * (rr / rr_total)
+                    # 극단적으로 작은 손실 추정 방지 하한
                     if result['expected_loss'] < 100:
-                        result['expected_loss'] = 100
+                        result['expected_loss'] = 100.0
                     qty_by_risk = max_loss_allowed / result['expected_loss']
                     budget_limited_qty = MAX_BUY_BUDGET // result['price']
                     result['optimal_qty'] = int(min(qty_by_risk, budget_limited_qty))
@@ -306,7 +352,7 @@ if __name__ == "__main__":
                     result['optimal_qty'] = 0
                 print(f"[{result['code']}] 가격:{result['price']} RR:{rr:.2f} 기대수익:{result['expected_profit']:.2f} Qty:{result['optimal_qty']}", flush=True)
 
-            # ✅ 3.5 상위 10개 종목 통계 CSV 저장 (요청 기능)
+            # 3.5) 상위 10개 종목 통계 CSV 저장
             try:
                 timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
                 csv_path = os.path.join(OUTPUT_DIR, f"candidates_stats_{timestamp_str}.csv")
@@ -334,7 +380,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"CSV 저장 중 오류: {e}", flush=True)
 
-            # 4. 주문 실행
+            # 4) 주문 실행 (리밸런싱)
             for result in results_sorted:
                 stock_code = result['code']
                 price = result['price']
@@ -347,7 +393,8 @@ if __name__ == "__main__":
                         order_result = send_order(stock_code, price, qty=add_qty, order_type="매수")
                         print(f"✅ 추가 매수 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'], add_qty, "매수", order_result)
+                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'],
+                                  add_qty, "매수", order_result)
                         if order_result.get("rt_cd") == "0":
                             if stock_code in portfolio:
                                 portfolio[stock_code]['qty'] += add_qty
@@ -360,7 +407,8 @@ if __name__ == "__main__":
                         order_result = send_order(stock_code, price, qty=sell_qty, order_type="매도")
                         print(f"부분 매도 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, result['prob_up'],
-                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'], sell_qty, "매도", order_result)
+                                  result['expected_profit'], result['expected_loss'], result['rr_ratio'],
+                                  sell_qty, "매도", order_result)
                         if order_result.get("rt_cd") == "0":
                             portfolio[stock_code]['qty'] -= sell_qty
                             if portfolio[stock_code]['qty'] <= 0:
@@ -387,7 +435,7 @@ if __name__ == "__main__":
 
     finally:
         if portfolio_values:
-            plt.rcParams['font.family'] = 'Malgun Gothic'  # 한글 폰트 설정 (윈도우)
+            plt.rcParams['font.family'] = 'Malgun Gothic'  # 한글 폰트
             plt.rcParams['axes.unicode_minus'] = False     # 마이너스 부호 깨짐 방지
 
             plt.figure(figsize=(10, 6))
@@ -398,7 +446,8 @@ if __name__ == "__main__":
             plt.grid(True)
             plt.legend()
             plt.tight_layout()
-            plt.savefig(os.path.join(OUTPUT_DIR, "누적수익률_그래프.png"), dpi=300)
-            print(f"누적 수익률 그래프 저장 완료 ({OUTPUT_DIR}/누적수익률_그래프.png)", flush=True)
+            out_path = os.path.join(OUTPUT_DIR, "누적수익률_그래프.png")
+            plt.savefig(out_path, dpi=300)
+            print(f"누적 수익률 그래프 저장 완료 ({out_path})", flush=True)
         else:
             print("저장할 데이터가 없습니다.", flush=True)
