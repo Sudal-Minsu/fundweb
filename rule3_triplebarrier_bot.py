@@ -1,10 +1,8 @@
 # rule3_triplebarrier_bot.py
 # ---------------------------------------------------------
 # today_recos.csv(rule_3.py 결과) 기반
-# ① 자동 매수(시장가, 동적 슬롯 균등비중)
-# ② 장중 트리플배리어(TP/SL/시간) 매도 루프
-#    - "auto": buy → sell-loop
-#    - 모든 시세/주문/잔고는 VTS API 사용 (MOCK 없음)
+# ① 자동 매수(시장가, 동적 슬롯 균등비중) — 보유종목 스킵, 남은 슬롯만 집행
+# ② 장중 트리플배리어(TP/SL/시간) 매도 루프(추천 여부 무관, 배리어로만 매도)
 # ③ 로그/리포팅
 #    - trades_log.csv : 매수/매도 + 1시간 HEARTBEAT(SNAP)
 #    - equity_log.csv : 현금/보유평가/에쿼티 (1시간 주기 + 체결 즉시)
@@ -13,6 +11,7 @@
 import os, json, time, requests, random
 import pandas as pd
 from pandas.tseries.offsets import BDay
+from datetime import time as dtime
 from typing import Optional, Tuple, Dict
 
 # ===== 주문/루프 슬립 설정 =====
@@ -29,16 +28,16 @@ HOLDINGS_CSV   = os.path.join(RESULT_DIR, "holdings.csv")
 # ----- 로그/리포팅 -----
 TRADES_CSV   = os.path.join(RESULT_DIR, "trades_log.csv")
 EQUITY_CSV   = os.path.join(RESULT_DIR, "equity_log.csv")
-EQUITY_SNAPSHOT_SEC = 3600  # ✅ 1시간마다 스냅샷(초). 체결 시엔 즉시 1회 추가 스냅샷
+EQUITY_SNAPSHOT_SEC = 3600  # 1시간마다 스냅샷(초). 체결 시엔 즉시 1회 추가 스냅샷
 
 MIN_PRICE_KRW  = 1000      # 1000원 미만 매수 금지
 CLOSE_HH       = 15        # 시간 배리어(장마감) 기준 시각
-CLOSE_MM       = 30
+CLOSE_MM       = 30        # ← 15:30으로 고정
 FEE_CUSHION    = 1.003     # 체결/수수료 여유 (기본 0.3%)
 
 # 스테일 보유행을 브로커 잔고 기준으로 청소할 때의 유예시간(초)
 CLEANUP_GRACE_SEC = 180
-# ✅ 방금 추가된 보유행이 즉시 매도되는 걸 막기 위한 최소 보유시간(초)
+# 방금 추가된 보유행이 즉시 매도되는 걸 막기 위한 최소 보유시간(초)
 MIN_HOLD_SEC = 60
 
 # ========== 트레이딩 파라미터 (고정 기본값) ==========
@@ -82,7 +81,7 @@ def ensure_files():
     if not os.path.exists(HOLDINGS_CSV):
         cols = ["code","qty","entry_date","entry_px","tp_px","sl_px","horizon_end","order_id_buy","last_update"]
         pd.DataFrame(columns=cols).to_csv(HOLDINGS_CSV, index=False)
-    ensure_log_files()  # ✅ 로그 파일 준비
+    ensure_log_files()
 
 def load_holdings():
     ensure_files()
@@ -146,7 +145,7 @@ def add_position(code, qty, entry_date, entry_px, tp_pct, sl_pct, horizon_days, 
     code = str(code).zfill(6)
     qty = int(qty)
 
-    # ⚠️ entry_px 검증 강하게
+    # entry_px 검증 강하게
     try:
         entry_px = float(entry_px)
     except Exception:
@@ -487,10 +486,20 @@ def get_cash_balance(access_token, app_key, app_secret) -> float:
         return 0.0
     return to_float(res2.get("dnca_tot_amt", 0))
 
+def get_orderable_cash(access_token, app_key, app_secret) -> float:
+    """실제 주문 가능 금액(증거금/체결예약 포함)을 우선 사용"""
+    _, out2 = check_account(access_token, app_key, app_secret)
+    if not out2:
+        return 0.0
+    keys = ["ord_psbl_cash", "ord_psbl_amt", "ord_psbl_cash_amt", "dnca_tot_amt"]
+    for k in keys:
+        if k in out2 and to_float(out2[k]) > 0:
+            return to_float(out2[k])
+    return to_float(out2.get("dnca_tot_amt", 0))
+
 def _portfolio_valuation(access_token, app_key, app_secret) -> Tuple[float, float, float]:
     """(cash, positions_value, equity) 반환"""
     cash = get_cash_balance(access_token, app_key, app_secret)
-
     pos_df, _ = check_account(access_token, app_key, app_secret)
     positions_value = 0.0
     if pos_df is not None and not pos_df.empty:
@@ -558,10 +567,10 @@ def maybe_snapshot_equity(access_token, app_key, app_secret, force: bool=False):
     df.to_csv(EQUITY_CSV, index=False, encoding="utf-8")
     _last_equity_snap = now_sec
 
-    # ✅ 스냅샷 직후 PNG 갱신
+    # 스냅샷 직후 PNG 갱신
     export_equity_png(os.path.join(RESULT_DIR, "equity_curve.png"))
 
-    # ✅ 1시간마다 trades_log에도 HEARTBEAT 남김(요청 반영)
+    # 1시간마다 trades_log에도 HEARTBEAT 남김
     log_trade(side="SNAP", code="", qty=0, price=0.0, reason="HEARTBEAT", odno="",
               tp_px=None, sl_px=None, cash_after=cash)
 
@@ -600,13 +609,13 @@ def _drop_stale_holdings_against_broker(df_hold: pd.DataFrame, pos_map: Dict[str
 def run_buy(tp_pct: float, sl_pct: float, k_max: int, horizon_d: int):
     """
     - today_recos.csv 상위 slots_to_use 종목만 집행
-    - 남은 예수금을 남은 슬롯 수로 매번 재분배(동적 예산)
-    - 시장가 매수 (주문/해시키 레이트리밋 + 재시도)
+    - 보유 종목은 스킵, 남은 슬롯만 매수
+    - 주문가능금액을 상한으로 수량 산정
+    - 실패 시 '1주씩' 줄이며 재시도
     """
     ensure_files()
 
     _SLEEP_BETWEEN_BUYS = 1.5
-    RETRY_BACKOFFS     = [1.2, 2.4, 4.8]
     JITTER_SEC         = 0.4
 
     def _sleep(sec: float):
@@ -630,16 +639,30 @@ def run_buy(tp_pct: float, sl_pct: float, k_max: int, horizon_d: int):
         return
     rec["code"] = rec["code"].astype(str).str.zfill(6)
 
-    # 3) 예수금 확인
-    cash = get_cash_balance(access_token, app_key, app_secret)
-    if cash <= 0:
-        print("[BUY] 예수금 0원 → 매수 없음")
+    # 2.5) 현재 보유 종목/슬롯 파악 (브로커 기준)
+    pos_map_now = _broker_positions_map(access_token, app_key, app_secret)
+    held_codes = {c for c,(q,_) in pos_map_now.items() if q > 0}
+    held_cnt   = len(held_codes)
+    slots_left = max(0, k_max - held_cnt)
+    if slots_left <= 0:
+        print(f"[BUY] 남은 슬롯 0 (보유 {held_cnt}/{k_max}) → 매수 없음")
         return
 
-    # 4) 슬롯 수
-    num_recos       = len(rec)
-    slots_to_use    = min(k_max, num_recos)
-    remaining_cash  = cash
+    # 보유 중인 종목은 추천에서 제외
+    rec = rec[~rec["code"].isin(held_codes)].reset_index(drop=True)
+    if rec.empty:
+        print("[BUY] 추천이 모두 보유 중인 종목 → 매수 없음")
+        return
+
+    slots_to_use = min(slots_left, len(rec))
+
+    # 3) 주문가능금액 확인
+    ord_cash_global = get_orderable_cash(access_token, app_key, app_secret)
+    if ord_cash_global <= 0:
+        print("[BUY] 주문가능금액 0원 → 매수 없음")
+        return
+
+    remaining_cash  = ord_cash_global
     taken = 0
 
     for _, r in rec.head(slots_to_use).iterrows():
@@ -654,38 +677,36 @@ def run_buy(tp_pct: float, sl_pct: float, k_max: int, horizon_d: int):
             print(f"[SKIP] {code} 현재가 {cur:.0f} < {MIN_PRICE_KRW}원")
             _sleep(_SLEEP_BETWEEN_BUYS); continue
 
-        # ✅ 동적 예산: 남은 돈 / 남은 슬롯
+        # 동적 예산(참고) + 주문가능금액 상한
         remaining_slots = max(1, slots_to_use - taken)
         dyn_budget = max(0.0, remaining_cash) / remaining_slots
 
-        LOCAL_CUSHION = 1.004  # 브로커 예약/수수료 반영 여유
-        qty = int(dyn_budget // (cur * LOCAL_CUSHION))
+        LOCAL_CUSHION = 1.004
+        ord_cash_now = get_orderable_cash(access_token, app_key, app_secret)
+        budget_for_this = min(dyn_budget, ord_cash_now)
+        qty = int(budget_for_this // (cur * LOCAL_CUSHION))
 
         if qty < 1:
-            print(f"[SKIP] {code} 동적예산 {dyn_budget:,.0f}원으로 1주 미만 → 스킵")
+            print(f"[SKIP] {code} 주문가능 {ord_cash_now:,.0f}원/동적 {dyn_budget:,.0f}원 → 1주 미만")
             _sleep(_SLEEP_BETWEEN_BUYS); continue
 
-        # 주문 직전 실예수금 재조회 + 줄여 맞추기
-        avail_cash = get_cash_balance(access_token, app_key, app_secret)
-        def can_afford(cash, px, q, cushion=LOCAL_CUSHION):
-            return cash >= (px * q * cushion) + 1000
+        print(f"[BUY] {code} 초기 수량 {qty}주 (현재가 {cur:.1f}, 동적 {dyn_budget:,.0f}, 주문가능 {ord_cash_now:,.0f})")
 
-        while qty > 0 and not can_afford(avail_cash, cur, qty):
-            qty -= 1
-
-        if qty < 1:
-            print(f"[SKIP] {code} 브로커 한도 내 구매 불가 → 스킵")
-            _sleep(_SLEEP_BETWEEN_BUYS); continue
-
-        spent_est = qty * cur * LOCAL_CUSHION
-        print(f"[BUY] {code} {qty}주 시장가 주문 (현재가 {cur:.1f}, 동적예산 {dyn_budget:,.0f}원, 예상집행 {spent_est:,.0f}원)")
-
-        # 주문 (백오프 재시도)
+        # ---- 주문(1주씩 감소하며 재시도) ----
         odno = None
-        for attempt, backoff in enumerate([0.0] + RETRY_BACKOFFS, start=1):
-            if backoff > 0:
-                _sleep(backoff)
-                print(f"   ↻ 재시도 {attempt}/{1 + len(RETRY_BACKOFFS)} …")
+        attempts = 0
+        MAX_ATTEMPTS = max(5, qty + 2)  # 너무 오래 끌지 않게 제한
+        while attempts < MAX_ATTEMPTS and qty >= 1:
+            attempts += 1
+
+            # 주문 직전 주문가능금액 재확인 → 현재 수량이 안 되면 1주씩 줄임
+            ord_cash_now = get_orderable_cash(access_token, app_key, app_secret)
+            while qty >= 1 and (cur * qty * LOCAL_CUSHION) > (ord_cash_now - 1000):
+                qty -= 1
+
+            if qty < 1:
+                print(f"[SKIP] {code} 주문가능금액 부족으로 수량 0")
+                break
 
             odno = execute_order(
                 stock_code=code, quantity=qty,
@@ -696,19 +717,24 @@ def run_buy(tp_pct: float, sl_pct: float, k_max: int, horizon_d: int):
             if odno:
                 break
 
+            # 실패 시 1주 감소 후 백오프
+            qty -= 1
+            if qty >= 1:
+                _sleep(1.2)  # 소폭 백오프
+
         if not odno:
             print(f"[FAIL] 시장가 주문 접수 실패: {code}")
             _sleep(_SLEEP_BETWEEN_BUYS); continue
 
-        # 실예수금 재조회
-        remaining_cash = get_cash_balance(access_token, app_key, app_secret)
+        # 실 주문가능금액 재조회(잔여)
+        remaining_cash = get_orderable_cash(access_token, app_key, app_secret)
 
         # 포지션 기록
         entry_px_val = cur  # (체결가 대신 현재가 근사)
         entry_dt = pd.to_datetime(r.get("entry_date", now_kst().date()))
         add_position(code, qty, entry_dt, entry_px_val, tp_pct, sl_pct, horizon_d, order_id_buy=odno)
 
-        # 🔹 거래 로그 & 에쿼티 스냅샷(즉시)
+        # 거래 로그 & 에쿼티 스냅샷(즉시)
         log_trade("BUY", code, qty, entry_px_val, reason="INIT", odno=odno,
                   tp_px=entry_px_val*(1+tp_pct), sl_px=entry_px_val*(1-sl_pct),
                   cash_after=remaining_cash)
@@ -720,7 +746,7 @@ def run_buy(tp_pct: float, sl_pct: float, k_max: int, horizon_d: int):
         if taken >= slots_to_use:
             break
 
-    print(f"[BUY] 완료: 집행 {taken}종목 / 요청 {slots_to_use}종목, 잔여예수금(추정) {remaining_cash:,.0f}원")
+    print(f"[BUY] 완료: 집행 {taken}종목 / 요청 {slots_to_use}종목, 잔여주문가능 {remaining_cash:,.0f}원")
     # 매수 루프 종료 후 한 번 더 스냅샷
     maybe_snapshot_equity(access_token, app_key, app_secret, force=True)
 
@@ -741,8 +767,7 @@ def run_sell_loop():
 
     while True:
         now = now_kst()
-        t_str = now.strftime("%H:%M")
-        if t_str >= f"{CLOSE_HH:02d}:{CLOSE_MM:02d}":
+        if now.time() >= dtime(CLOSE_HH, CLOSE_MM):
             break
 
         # 잔고 캐시 업데이트
@@ -756,7 +781,7 @@ def run_sell_loop():
             save_holdings(df)
 
         if df.empty:
-            # 루프마다 1회 스냅샷(주기 조건 충족 시) → PNG 갱신/HEARTBEAT 포함
+            # 루프마다 1회 스냅샷(주기 조건 충족 시)
             maybe_snapshot_equity(access_token, app_key, app_secret, force=False)
             _sleep_with_jitter(IDLE_LOOP_SLEEP)
             continue
@@ -770,7 +795,7 @@ def run_sell_loop():
             if br_qty <= 0:
                 continue
 
-            # ✅ 방금 추가된 포지션은 MIN_HOLD_SEC 동안 매도평가 skip
+            # 방금 추가된 포지션은 MIN_HOLD_SEC 동안 매도평가 skip
             last_update = pd.to_datetime(row.get("last_update"))
             if pd.notna(last_update):
                 age_sec = (now.tz_localize(None) - last_update).total_seconds()
@@ -815,7 +840,7 @@ def run_sell_loop():
                     access_token=access_token, base_url=base_url
                 )
                 if odno:
-                    # 🔹 거래 로그(현금은 재조회) & 스냅샷(즉시)
+                    # 거래 로그(현금은 재조회) & 스냅샷(즉시)
                     cash_after = get_cash_balance(access_token, app_key, app_secret)
                     log_trade("SELL", code, br_qty, cur, reason=reason, odno=odno,
                               tp_px=tp if reason=="TP" else None,
@@ -840,10 +865,9 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="rule_3 추천 기반 트리플배리어 매매 봇 (VTS)")
     sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("buy", help="시장가 매수 실행 (동적 슬롯 균등비중)")
+    sub.add_parser("buy", help="시장가 매수 실행 (동적 슬롯 균등비중; 보유 스킵)")
     sub.add_parser("sell-loop", help="장중 트리플배리어 매도 루프")
     sub.add_parser("auto", help="buy 후 sell-loop 연속 실행")
-    # (선택) 수동 그래프 뽑기용:
     sub.add_parser("export-equity", help="equity_log.csv로 에쿼티 그래프 PNG 저장")
     args = ap.parse_args()
 
