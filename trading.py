@@ -14,25 +14,39 @@ APP_USER = "최진혁"
 APP_KEY_SERVICE = "mock_app_key"
 APP_SECRET_SERVICE = "mock_app_secret"
 
-DEFAULT_APP_KEY = "PSbWOQW9CsjVIq8MwF3oeHG9gY9JjLHJVu8t"
+# 상시
+DEFAULT_APP_KEY = "PSbWOQW9CsjVIq8MwF3oeHG9gY9JjLHJVu8t" 
 DEFAULT_APP_SECRET = (
     "uzxSVMytr/jWcbCYMBGcRMloeCM9A1fiTOur3Y3j30RY6gtvf3G0Bn1y/"
     "z6J2pa0CKKZRFf6OXpk/umYfxZaWQr4eVmoCJG6BX7wfQ/GOYlEDotyouzkMwevv7hjI06tzruSpPuN6EMS1nirtIeTnh8kxxN4LBS70XggdFevyM3KR87RG7k="
-)
+) 
+
+USE_KEYRING = False  # 이 값을 False로 두면 DEFAULT_* 값만 사용합니다.
 
 def _ensure_keyring():
+    if not USE_KEYRING:
+        return
     if keyring.get_password(APP_KEY_SERVICE, APP_USER) is None:
         keyring.set_password(APP_KEY_SERVICE, APP_USER, DEFAULT_APP_KEY)
     if keyring.get_password(APP_SECRET_SERVICE, APP_USER) is None:
         keyring.set_password(APP_SECRET_SERVICE, APP_USER, DEFAULT_APP_SECRET)
 
-def get_api_keys():
+def get_api_keys(app_key=None, app_secret=None):
+    """
+    우선순위: (인자) -> (DEFAULT_*) -> (keyring)
+    USE_KEYRING=False면 DEFAULT_*만 사용합니다.
+    """
+    if app_key and app_secret:
+        return app_key, app_secret
+    if not USE_KEYRING:
+        return DEFAULT_APP_KEY, DEFAULT_APP_SECRET
     _ensure_keyring()
     return (
         keyring.get_password(APP_KEY_SERVICE, APP_USER),
         keyring.get_password(APP_SECRET_SERVICE, APP_USER),
     )
 
+# 상시
 ACCOUNT_INFO = {"CANO": "50139282", "ACNT_PRDT_CD": "01"}
 
 OUTPUT_DIR = "rule_2_결과"
@@ -81,8 +95,8 @@ def init_session(app_key=None, app_secret=None, url_base=None):
     if url_base:
         SESSION["url_base"] = url_base
 
-    if not app_key or not app_secret:
-        app_key, app_secret = get_api_keys()
+    # 인자로 안 들어오면 get_api_keys()에서 DEFAULT_* 또는 keyring을 사용
+    app_key, app_secret = get_api_keys(app_key, app_secret)
 
     # 토큰 발급
     res = requests.post(
@@ -102,7 +116,7 @@ def init_session(app_key=None, app_secret=None, url_base=None):
     SESSION["app_secret"] = app_secret
     SESSION["access_token"] = access_token
     SESSION["inited"] = True
-    print("🔑 액세스 토큰 OK", flush=True)
+    print(f"🔑 액세스 토큰 OK (account={ACCOUNT_INFO.get('CANO')}, mock/VTS)", flush=True)
 
 def is_session_ready():
     return SESSION.get("inited") and bool(SESSION.get("access_token"))
@@ -781,18 +795,17 @@ def append_daily_pnl(now_dt, total_eval_amount):
     except Exception:
         cumulative_return_pct = None
 
-    row = {
+    row_df = pd.DataFrame([{
         "date": now_dt.strftime("%Y-%m-%d"),
         "time": now_dt.strftime("%H:%M:%S"),
         "총평가금액": float(total_eval_amount),
         "누적수익률(%)": round(cumulative_return_pct, 2) if cumulative_return_pct is not None else None,
-    }
+    }])
+
     if os.path.exists(DAILY_PNL_CSV):
-        df = pd.read_csv(DAILY_PNL_CSV)
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        row_df.to_csv(DAILY_PNL_CSV, mode="a", header=False, index=False, encoding="utf-8-sig")
     else:
-        df = pd.DataFrame([row])
-    df.to_csv(DAILY_PNL_CSV, index=False, encoding="utf-8-sig")
+        row_df.to_csv(DAILY_PNL_CSV, index=False, encoding="utf-8-sig")
 
     pct_str = f"{cumulative_return_pct:.2f}%" if cumulative_return_pct is not None else "NA"
     print(f"🧾 집계 저장 → {DAILY_PNL_CSV} (총평가금액={total_eval_amount:,.0f}, 누적수익률={pct_str})", flush=True)
@@ -801,19 +814,21 @@ def append_daily_pnl(now_dt, total_eval_amount):
 def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra=None):
     log_file = Path("trade_log_2.csv")
     code_str = str(stock_code).zfill(6)
-    log_entry = {
-        "거래시간": timestamp, "종목코드": code_str, "현재가": price,
-        "주문수량": qty, "주문종류": order_type,
+
+    ts = timestamp.strftime("%Y-%m-%d %H:%M:%S") if hasattr(timestamp, "strftime") else str(timestamp)
+    row_df = pd.DataFrame([{
+        "거래시간": ts,
+        "종목코드": code_str,
+        "현재가": price,
+        "주문수량": qty,
+        "주문종류": order_type,
         "주문결과": (order_result or {}).get("msg1", "NO_RESPONSE"),
-    }
+    }])
+
     if log_file.exists():
-        df = pd.read_csv(log_file, dtype={"종목코드": str})
-        df["종목코드"] = df["종목코드"].astype(str).str.zfill(6)
-        df = pd.concat([df, pd.DataFrame([log_entry])], ignore_index=True)
+        row_df.to_csv(log_file, mode="a", header=False, index=False, encoding="utf-8-sig")
     else:
-        df = pd.DataFrame([log_entry])
-    df["종목코드"] = df["종목코드"].astype(str).str.zfill(6)
-    df.to_csv(log_file, index=False, encoding="utf-8-sig")
+        row_df.to_csv(log_file, index=False, encoding="utf-8-sig")
 
 # === [취소 로그 모드] 간결하게만 출력 ===
 CANCEL_LOG_CONCISE = True
