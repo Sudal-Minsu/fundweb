@@ -5,8 +5,8 @@ from rule_2_predict import run_rule_2_predict
 # ───────────── DB 설정 ─────────────
 DB_CONFIG = {
     "host": "localhost",
-    "user": "root",
-    "password": "1234",
+    "user": "stockuser",
+    "password": "stockpass123!",
     "port": 3306,
     "database": "news_db",
     "charset": "utf8mb4"
