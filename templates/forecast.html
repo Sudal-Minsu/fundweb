@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>Strategy</title>
+  <title>Forecast</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
   <style>
     html, body {
@@ -75,6 +75,46 @@
       min-height: 600px;
     }
 
+    table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 16px;
+      text-align: center;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 14px;
+      white-space: nowrap;
+    }
+    th {
+      background-color: #555;
+      color: white;
+    }
+    .sub-table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 18px;
+      text-align: center;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
+    }
+    .sub-table th, .sub-table td {
+      border: 1px solid #888;
+      padding: 14px;
+      white-space: nowrap;
+    }
+    .sub-table th {
+      background-color: #555;
+      color: white;
+    }
+
+    .positive { color: limegreen; font-weight: bold; }
+    .negative { color: deepskyblue; font-weight: bold; }
+
   </style>
 </head>
 <body>
@@ -82,7 +122,7 @@
     <div class="nav-left">
       <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
       <a href="/home">StockLENS</a>
-      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Strategy</span>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Forecast</span>
     </div>
     <div class="nav-links">
       <a href="/home" class="home-button">Home</a>
@@ -93,5 +133,53 @@
   </nav>
 
   <div class="main">
+  <h2 style="text-align: center;">▸ 매수 후보 예측</h2>
+  <table>
+    <thead>
+      <tr>
+        {% for col in table_cols %}
+        <th>{{ col }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in table_rows %}
+      <tr>
+        {% for col in table_cols %}
+          {% set val = row[col] %}
+          {% if col == "손익비" %}
+            <td class="{{ 'positive' if val|float >= 1 else 'negative' }}">{{ val }}</td>
+          {% else %}
+            <td>{{ val }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div style="margin-top: 100px; text-align: center;">
+    <h2>▸ 종목별 기대값</h2>
+    <table class="sub-table">
+      <thead>
+        <tr>
+          <th>종목코드</th>
+          <th>기대값</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in expectancy_list %}
+        <tr>
+          <td>{{ item["종목코드"] }}</td>
+          <td class="{{ 'positive' if item['기대값']|float >= 0 else 'negative' }}">
+            {{ item["기대값"] }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 </body>
 </html>

@@ -1,2 +1,7 @@
 config.py
+stock_data.py
+auto_pipeline.py
+rule_2_predict.py
+upload_최진혁.py
 __pycache__
+logs

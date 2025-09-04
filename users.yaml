@@ -1,0 +1,7 @@
+userA:
+  api_key: "USER_A_API_KEY"
+  output: "평가자료.csv"
+
+userB:
+  api_key: "USER_B_API_KEY"
+  output: "kelly_결과.csv"

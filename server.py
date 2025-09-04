@@ -10,10 +10,13 @@ from functions import read_trades_mysql, single_trade
 from flask_sqlalchemy import SQLAlchemy
 import matplotlib.pyplot as plt
 import io
+import yaml
+import requests
 from config import DB_CONFIG
 
 app = Flask(__name__)
 modeling_status = {"state": "idle", "metrics": {}, "plot_path": ""}
+UPLOAD_BASE = os.path.join(app.root_path, "rule_2_결과")
 
 # DB 설정 (SQLite로 간단하게 시작)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///portfolio.db'
@@ -29,6 +32,14 @@ with app.app_context():
     db.create_all()
 
 trading_thread = None
+
+
+def job_fetch_data():
+    run_auto_pipeline()
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(job_fetch_data, "cron", hour=9, minute=0)
+scheduler.start()
 
 @app.route('/ping')
 def show_table():
@@ -54,6 +65,56 @@ def show_table():
 
     return render_template('ping.html', data=summary_rows, holdings=holding_rows)
 
+# 자동 업데이트
+with open("users.yaml", encoding="utf-8") as f:
+    USERS = yaml.safe_load(f)
+
+def generate_user_csv(user_id, config):
+    headers = {"Authorization": f"Bearer {config['api_key']}"}
+    url = "https://openapivts.koreainvestment.com:29443"
+    r = requests.get(url, headers=headers)
+    data = r.json()
+
+    df = pd.DataFrame(data)
+    today = datetime.date.today().strftime("%Y-%m-%d")
+
+    user_dir = os.path.join("rule_2_결과", user_id)
+    os.makedirs(user_dir, exist_ok=True)
+
+    file_path = os.path.join(user_dir, config["output"])
+    df.to_csv(file_path, index=False, encoding="utf-8-sig")
+    print(f"[{user_id}] {file_path} 저장 완료")
+
+def daily_job():
+    print("auto_pipeline 실행 시작")
+    run_auto_pipeline()
+    print("auto_pipeline 완료")
+
+    print("사용자별 CSV 생성 시작")
+    for user_id, cfg in USERS.items():
+        try:
+            generate_user_csv(user_id, cfg)
+        except Exception as e:
+            print(f"[ERROR] {user_id} 업데이트 실패:", e)
+    print("사용자별 CSV 생성 완료")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(daily_job, "cron", hour=9, minute=0)
+scheduler.start()
+
+@app.route("/upload/<user_id>", methods=["POST"])
+def upload_csv(user_id):
+    if "file" not in request.files:
+        return jsonify({"error": "파일이 없습니다"}), 400
+
+    file = request.files["file"]
+    user_dir = os.path.join(UPLOAD_BASE, user_id)
+    os.makedirs(user_dir, exist_ok=True)
+
+    save_path = os.path.join(user_dir, file.filename)
+    file.save(save_path)
+
+    return jsonify({"message": f"{file.filename} 업로드 성공", "path": save_path})
 
 #홈 페이지 라우트
 @app.route("/home")
@@ -145,7 +206,45 @@ def cumulative_returns():
 #forecast 페이지 라우트
 @app.route("/forecast")
 def forecast():
-    return render_template("forecast.html")
+    try:
+        result_dir = os.path.join(app.root_path, "rule_2_결과")
+        file_path = os.path.join(result_dir, "latest_candidates_stats.csv")
+
+        if not os.path.exists(file_path):
+            return "<h2> latest_candidates_stats.csv 파일이 존재하지 않습니다.</h2>"
+
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df = pd.read_csv(file_path, encoding="cp949")
+
+        df = df.fillna("")
+        df["승률"] = pd.to_numeric(df["상승확률(%)"], errors="coerce") / 100
+        df["기대수익"] = pd.to_numeric(df["기대수익"], errors="coerce")
+        df["예상손실"] = pd.to_numeric(df["예상손실"], errors="coerce")
+        df["손익비"] = pd.to_numeric(df["손익비"], errors="coerce")
+        df["기대값"] = (df["승률"] * df["기대수익"]) - ((1 - df["승률"]) * df["예상손실"])
+        table_cols = ["종목코드", "현재가", "기대수익", "예상손실", "손익비", "상승확률(%)"]
+        table_rows = df[table_cols].to_dict(orient="records")
+
+        expectancy_list = [
+            {
+                "종목코드": row["종목코드"],
+                "기대값": f"{val:,.2f}" if pd.notna(val) else "N/A"
+            }
+            for row, val in zip(df.to_dict(orient="records"), df["기대값"])
+        ]
+
+        return render_template(
+            "forecast.html",
+            table_cols=table_cols,
+            table_rows=table_rows,
+            expectancy_list=expectancy_list
+        )
+
+    except Exception as e:
+        print(f"[ERROR] /forecast 실패: {e}")
+        return f"<h2>/forecast 로드 실패: {e}</h2>"
 
 #리포트 페이지 라우트
 @app.route("/strategy")
