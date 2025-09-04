@@ -33,14 +33,12 @@ device = torch.device("cpu")
 
 
 # MySQL 연결 설정
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "0000",
-    "database": "news_db",
-    "port": 3306,
-    "charset": "utf8mb4"
-}
+DB_CONFIG = {"host": "localhost", 
+             "user": "stockuser", 
+             "password": "stockpass123!", 
+             "port": 3306, 
+             "database": "news_db", 
+             "charset": "utf8mb4", }
 
 # ===== DB =====
 def get_engine():
