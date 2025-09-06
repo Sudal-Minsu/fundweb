@@ -1,4 +1,3 @@
-config.py
 stock_data.py
 auto_pipeline.py
 rule_2_predict.py

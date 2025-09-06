@@ -29,8 +29,8 @@ PERCENT = 5
 # DB 설정
 DB_CONFIG = {
     "host": "localhost",
-    "user": "stockuser",
-    "password": "stockpass123!",
+    "user": "root",
+    "password": "1234",
     "port": 3306,
     "database": "news_db",
     "charset": "utf8mb4",
