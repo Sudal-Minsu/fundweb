@@ -15,6 +15,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from joblib import Parallel, delayed
 import multiprocessing as mp
 import hashlib, struct
+from config_choi import DB_CONFIG
 
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 12
@@ -25,16 +26,6 @@ LEARNING_RATE = 0.0005
 EPOCHS = 20
 VAL_LOSS_THRESHOLD = 0.693
 PERCENT = 5
-
-# DB 설정
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "1234",
-    "port": 3306,
-    "database": "news_db",
-    "charset": "utf8mb4",
-}
 
 # 병렬 설정
 N_CORE = max(1, mp.cpu_count() - 1) # N_CORE = 5
