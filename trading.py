@@ -4,7 +4,7 @@ import time
 import json
 import requests
 import pandas as pd
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime
 from pathlib import Path
 import pymysql
 from config_choi import DB_CONFIG, get_api_keys, ACCOUNT_INFO
@@ -18,23 +18,20 @@ MAX_PER_STOCK_BUDGET = 50_000_000     # 종목당 상한
 INVEST_RATE_FROM_PREV_TV = 0.0025     # 0.25%
 
 # ───────────── 시간 상수 ─────────────
-CANCEL_BUY_TIME  = dtime(14, 55)      # 매수 미체결 취소 시각
-FORCE_SELL_TIME  = dtime(15, 0)       # 15:00 강제 매도
-MARKET_CLOSE_TIME= dtime(15, 30)      # 15:30 마감 집계/종료
+CANCEL_BUY_TIME   = dtime(14, 55)      # 매수 미체결 취소 시각
+FORCE_SELL_TIME   = dtime(15, 0)       # 15:00 강제 매도
+MARKET_CLOSE_TIME = dtime(15, 30)      # 15:30 마감 집계/종료
 
 # 장전 BID 레벨(1=매수호가1, 2=매수호가2 …)
-PREOPEN_BID_LEVEL     = 1
-PREOPEN_BID_TIME      = dtime(8, 59, 30)   # 08:59:30 정확 기상
+PREOPEN_BID_LEVEL = 1
+PREOPEN_BID_TIME  = dtime(8, 59, 30)   # 08:59:30 정확 기상
 
 # 스냅샷 시각 (정확 기상)
-SNAP_0900_TIME = dtime(9, 0, 10)      # 09:00:10 정확 기상
-SNAP_1500_TIME = dtime(15, 0, 0)      # 15:00:00 정확 기상
+SNAP_0900_TIME = dtime(9, 0, 10)       # 09:00:10 정확 기상
+SNAP_1500_TIME = dtime(15, 0, 0)       # 15:00:00 정확 기상
 
-# ───────────── 손절 상수 ─────────────
-STOP_LOSS_PCT = -1.0                  # 손절 임계: -1% 이하
-STOPCHECK_FROM = dtime(9, 0)          # 첫 체크: 09:00
-STOPCHECK_TO   = dtime(14, 57)        # 마지막 체크: 14:57
-STOPCHECK_EVERY_MIN = 3               # 3분 간격
+# 15:00 이후 조기 종료 체크 주기(초)
+POST_SELL_CHECK_INTERVAL_SEC = 5 * 60  # 5분
 
 # 상태 파일
 BOUGHT_TODAY_PATH       = os.path.join(OUTPUT_DIR, "bought_today.json")
@@ -735,7 +732,7 @@ def save_portfolio_snapshot(now_dt, holdings, summary=None):
     def _f(key):  # summary(output2[0])의 수치를 float으로 안전 변환
         return _num0((summary or {}).get(key))
 
-    # ✅ 열 구성(순서 보장): date, time, 평가금액, 매입금액, 평가손익금액, 예수금, 총평가금액
+    # 열 구성(순서 보장): date, time, 평가금액, 매입금액, 평가손익금액, 예수금, 총평가금액
     row = {
         "date": now_dt.strftime("%Y-%m-%d"),
         "time": now_dt.strftime("%H:%M:%S"),
@@ -779,7 +776,7 @@ def save_holdings_snapshot(now_dt, holdings):
 
 # ───────────── 로그 ─────────────
 def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra=None):
-    log_file = Path(OUTPUT_DIR) / "trade_log_2.csv" 
+    log_file = Path(OUTPUT_DIR) / "trade_log_2.csv"
     code_str = str(stock_code).zfill(6)
     ts = timestamp.strftime("%Y-%m-%d %H:%M:%S") if hasattr(timestamp, "strftime") else str(timestamp)
     row_df = pd.DataFrame([{
@@ -790,13 +787,12 @@ def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra
         "주문종류": order_type,
         "주문결과": (order_result or {}).get("msg1", "NO_RESPONSE"),
     }])
-    # 항상 새로 쓰고 싶으면 mode="w", 누적 기록하려면 mode="a"
     if log_file.exists():
         row_df.to_csv(log_file, mode="a", header=False, index=False, encoding="utf-8-sig")
     else:
         row_df.to_csv(log_file, index=False, encoding="utf-8-sig")
 
-# ───────────── 조기 종료 관련 유틸 추가 ─────────────
+# ───────────── 조기 종료 관련 유틸 ─────────────
 def has_open_orders(today_orders):
     def _text(o, *keys):
         for k in keys:
@@ -862,28 +858,34 @@ def save_all_before_exit(tag="early_exit"):
     print(f"🛑 [{tag}] 조기/마감 종료 직전 저장 완료 → 종료합니다.", flush=True)
     sys.exit(0)
 
-def maybe_early_exit(reason_tag=""):
-    """
-    조건: (미체결 없음) AND (평가금액(주식)=0)
-    충족 시 3종 저장 후 즉시 종료.
-    """
-    try:
-        today_orders = get_today_orders()
-    except Exception:
-        today_orders = []
-    try:
-        summary = get_account_summary()
-        eval_amount = _num0(summary.get("scts_evlu_amt"))
-    except Exception:
-        eval_amount = 0.0
+# 15:00 이후에만 사용할 조기 종료 체크(5분 간격)
+def monitor_after_3pm_for_idle_exit():
+    print("🕒 15:00 이후 5분 간격 모니터링 시작 (조건: 미체결 없음 AND 주식 평가금액=0) …", flush=True)
+    end_dt = datetime.combine(datetime.now().date(), MARKET_CLOSE_TIME)
+    while True:
+        now = datetime.now()
+        if now >= end_dt:
+            print("⏰ 마감 시각 도달 — 조기 종료 조건 미충족, 다음 단계 진행.", flush=True)
+            return
+        try:
+            today_orders = get_today_orders()
+        except Exception:
+            today_orders = []
+        try:
+            summary = get_account_summary()
+            eval_amount = _num0(summary.get("scts_evlu_amt"))
+        except Exception:
+            eval_amount = 0.0
 
-    no_open = not has_open_orders(today_orders)
-    if no_open and eval_amount == 0:
-        save_all_before_exit(tag=f"early_exit:{reason_tag}")
-    return False
+        no_open = not has_open_orders(today_orders)
+        print(f"   · 체크 @ {now.strftime('%H:%M:%S')} → 미체결없음={no_open}, 주식평가금액={eval_amount:,.0f}", flush=True)
+        if no_open and eval_amount == 0:
+            save_all_before_exit(tag="post_3pm_idle")
 
-# 첫 체크 보호 플래그 (손절 루틴 첫 회는 조기 종료 점검 생략)
-_EARLY_EXIT_FIRST_DONE = False
+        # 다음 체크까지 대기 (마감까지 남은 시간과 5분 중 작은 값)
+        remaining = (end_dt - now).total_seconds()
+        sleep_s = max(1, min(POST_SELL_CHECK_INTERVAL_SEC, remaining))
+        time.sleep(sleep_s)
 
 # ───────────── 이벤트 핸들러 ─────────────
 def do_preopen_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map):
@@ -900,9 +902,7 @@ def do_snapshot(tag=""):
     print(f"📸 스냅샷({tag})", flush=True)
     save_portfolio_snapshot(now, holdings, summary=summary)
     save_holdings_snapshot(now, holdings)
-    # 09:00 스냅 후 조기 종료 점검 (선택적이지만 편의상 활성화)
-    if tag == "09:00":
-        maybe_early_exit(reason_tag="snapshot_0900")
+    # ❌ 요청에 따라 09:00 스냅 이후 조기 종료 점검 제거
 
 def do_cancel_buys():
     print("🕝 [정시] 14:55 매수 미체결 전량 취소", flush=True)
@@ -935,8 +935,7 @@ def do_cancel_buys():
         print(f"✅ 전량 취소 요청 완료: 취소요청 {num}건 / 총 {total_canceled}주 취소", flush=True)
     except Exception as e:
         print(f"⚠️ 취소 처리 실패: {e}", flush=True)
-    # 취소 직후 조기 종료 점검
-    maybe_early_exit(reason_tag="cancel_buys")
+    # ❌ 요청에 따라 14:55 취소 직후 조기 종료 점검 제거
 
 def do_force_sell_and_snapshot():
     # 15:00 스냅샷 먼저, 그 다음 전량 매도
@@ -963,7 +962,10 @@ def do_force_sell_and_snapshot():
         print(f"⛳ 15:00 전량 매도[{reason}]: {code} sellable={sellable_qty}", flush=True)
         result = send_order_throttled(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
         log_trade(now, code, cur or 0, sellable_qty, "매도", result)
-    print("↩️ 15:00 강제 매도 주문 발행 완료 — 루틴 계속", flush=True)
+    print("↩️ 15:00 강제 매도 주문 발행 완료 — 5분 간격 모니터링으로 전환", flush=True)
+
+    # 15:00 이후 ~ 15:30까지 5분 간격으로 조기 종료 조건 모니터링
+    monitor_after_3pm_for_idle_exit()
 
 def do_market_close_and_exit():
     # 마감 종료도 3종 저장 보장
@@ -1013,9 +1015,9 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
             print(f"  ❌ 계산된 수량=0 (invest={invest_amt:,.0f}, price={price}): {code}", flush=True); continue
         psbl = inquire_psbl_order(code, price=price, ord_dvsn="00", include_cma="Y", include_ovrs="N")
         msg = psbl.get("msg", "")
+        # ❗ 장 종료 메시지 감지 시에도 즉시 종료하지 않음(요청사항)
         if is_market_closed_msg(msg):
-            print("⛔ 시장 종료 감지(주문가능 응답) — 즉시 저장 후 종료", flush=True)
-            save_all_before_exit(tag="market_closed:psbl")
+            print("⛔ 시장 종료 메시지 감지(주문가능 응답) — 종료하지 않고 스킵/계속 진행", flush=True)
         if any(k in msg for k in ban_keywords):
             not_tradable_today.add(code); save_not_tradable(today_str, not_tradable_today)
             print(f"  ⛔ 종목 거래제한 감지 → 오늘 스킵 등록: {code} / {msg}", flush=True); continue
@@ -1030,10 +1032,9 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
         need_approx = price * qty
         print(f"  🟩 [장전] 매수 00 요청: {code} x{qty} @ {price} (src={price_src}, 필요자금≈{need_approx:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
         log_trade(datetime.now(), code, price, qty, "매수", result)
-        # 매수 응답에서 시장 종료 감지
+        # ❗ 매수 응답에서도 장 종료 감지 시 즉시 종료하지 않음
         if is_market_closed_msg(msg2):
-            print("⛔ 시장 종료 감지(매수 응답) — 즉시 저장 후 종료", flush=True)
-            save_all_before_exit(tag="market_closed:buy_resp")
+            print("⛔ 시장 종료 메시지 감지(매수 응답) — 종료하지 않고 계속 진행", flush=True)
         if str(result.get("rt_cd")) == "0":
             bought_today.add(code); save_bought_today(today_str, bought_today)
             refresh_avg_after_buy(code, tries=2, delay=1.0)
@@ -1041,51 +1042,6 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
             if any(k in msg2 for k in ban_keywords):
                 not_tradable_today.add(code); save_not_tradable(today_str, not_tradable_today)
                 print(f"  ⛔ 매수 응답에서 매매불가 감지 → 오늘 스킵 등록: {code}", flush=True)
-
-# ───────────── 손절 체크 ─────────────
-def do_stoploss_once():
-    """
-    1) 현재 보유 종목 조회
-    2) 각 종목 손익률 계산 (cur vs avg)
-    3) 손익률 <= STOP_LOSS_PCT 이면, 당일 미체결 매도 수량 제외하고 시장가 전량 매도
-    """
-    now = datetime.now()
-    try:
-        today_orders = get_today_orders()
-    except Exception:
-        today_orders = []
-    holdings = get_all_holdings()
-
-    for code, pos in (holdings or {}).items():
-        code = str(code).zfill(6)
-        qty  = int(pos.get("qty", 0) or 0)
-        if qty <= 0:
-            continue
-
-        avg = pos.get("avg_price", None)
-        # 서버가 제공하는 보유현황 현재가가 없으면 호가/시세로 보강
-        cur = pos.get("cur_price", None) or get_current_price(code)
-        pnl = calc_pnl_pct(avg, cur) if (avg and cur) else None
-        if pnl is None:
-            continue
-
-        if pnl <= STOP_LOSS_PCT:
-            # 당일 이미 나간 매도 주문의 미체결 수량 제외
-            open_sell_qty = get_open_sell_qty_for_code(today_orders, code)
-            sellable_qty = max(0, qty - open_sell_qty)
-            if sellable_qty <= 0:
-                continue
-
-            print(f"⛔ 손절 매도 트리거: {code} pnl={pnl:.2f}% → {sellable_qty}주 시장가", flush=True)
-            result = send_order_throttled(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
-            log_trade(now, code, cur or 0, sellable_qty, "매도", result)
-
-    # 두 번째 호출부터 조기 종료 점검
-    global _EARLY_EXIT_FIRST_DONE
-    if _EARLY_EXIT_FIRST_DONE:
-        maybe_early_exit(reason_tag="stoploss_check")
-    else:
-        _EARLY_EXIT_FIRST_DONE = True
 
 # ───────────── 상태 I/O ─────────────
 def load_bought_today(today_str):
@@ -1118,20 +1074,6 @@ def save_not_tradable(today_str, codes_set):
             json.dump({"date": today_str, "codes": sorted(list(codes_set))}, f, ensure_ascii=False, indent=2)
     except: pass
 
-# ───────────── 스케줄 유틸 ─────────────
-def _gen_stopcheck_events_for_today(today):
-    """
-    오늘 날짜 기준으로 09:00 ~ 14:57 사이 3분 간격으로 손절 이벤트 생성
-    """
-    events = []
-    start_dt = datetime.combine(today, STOPCHECK_FROM)
-    end_dt   = datetime.combine(today, STOPCHECK_TO)
-    cur_dt = start_dt
-    while cur_dt <= end_dt:
-        events.append(("stoploss_check", cur_dt, do_stoploss_once))
-        cur_dt += timedelta(minutes=STOPCHECK_EVERY_MIN)
-    return events
-
 # ───────────── 하루 일정표 구성 및 실행 ─────────────
 def build_today_events(today_candidates, bought_today, not_tradable_today, prev_tv_map):
     today = datetime.now().date()
@@ -1142,9 +1084,6 @@ def build_today_events(today_candidates, bought_today, not_tradable_today, prev_
         ("snap_1500_sell", datetime.combine(today, SNAP_1500_TIME),     do_force_sell_and_snapshot),
         ("close_and_exit", datetime.combine(today, MARKET_CLOSE_TIME),  do_market_close_and_exit),
     ]
-
-    # ➕ 3분 주기 손절 이벤트 추가 (09:00 ~ 14:57)
-    today_events += _gen_stopcheck_events_for_today(today)
 
     # 현재 이후 이벤트만 유지 (재시작 시 안전)
     now = datetime.now()
