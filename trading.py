@@ -13,13 +13,11 @@ from config_choi import DB_CONFIG, get_api_keys, ACCOUNT_INFO
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 종목당 투자금: 전일 거래대금의 0.25% (최대 5천만)
-MAX_PER_STOCK_BUDGET = 50_000_000     # 종목당 상한
+# 종목당 투자금: 전일 거래대금의 0.25% 
 INVEST_RATE_FROM_PREV_TV = 0.0025     # 0.25%
 
 # ───────────── 시간 상수 ─────────────
 CANCEL_BUY_TIME   = dtime(14, 55)      # 매수 미체결 취소 시각
-FORCE_SELL_TIME   = dtime(15, 0)       # 15:00 강제 매도
 MARKET_CLOSE_TIME = dtime(15, 30)      # 15:30 마감 집계/종료
 
 # 장전 BID 레벨(1=매수호가1, 2=매수호가2 …)
@@ -541,16 +539,6 @@ def get_today_orders():
         params["CTX_AREA_NK100"] = j.get("ctx_area_nk100", "")
     return items
 
-def build_bought_today_set(today_orders):
-    bought = set()
-    for o in today_orders:
-        code = str(o.get("pdno", "")).zfill(6)
-        side_txt = (o.get("sll_buy_dvsn_cd") or o.get("sll_buy_dvsn_name")
-                    or o.get("trad_dvsn_name") or "").strip()
-        is_buy   = ("매수" in side_txt) or (str(side_txt) in ("02","2"))
-        if code and is_buy: bought.add(code)
-    return bought
-
 def get_open_sell_qty_for_code(today_orders, code: str) -> int:
     code = str(code).zfill(6)
     def _text(o,*keys):
@@ -680,7 +668,6 @@ def inquire_psbl_order(stock_code, price, ord_dvsn="04", include_cma="Y", includ
 
 # ───────────── 스냅샷/로그 ─────────────
 INITIAL_CAPITAL = 100_000_000
-INITIAL_TOT_EVAL = None
 
 def get_account_summary():
     ensure_session()
@@ -739,12 +726,12 @@ def save_portfolio_snapshot(now_dt, holdings, summary=None):
         "평가금액": _f("scts_evlu_amt"),
         "매입금액": _f("pchs_amt_smtl_amt"),
         "평가손익금액": _f("evlu_pfls_smtl_amt"),
-        "예수금": _f("dnca_tot_amt"),          # ← 추가
+        "예수금": _f("dnca_tot_amt"),        
         "총평가금액": _f("tot_evlu_amt"),
     }
     df = pd.DataFrame([row])
 
-    # 🔁 항상 덮어쓰기
+    # 항상 덮어쓰기
     df.to_csv(PORTFOLIO_CSV, mode="w", index=False, encoding="utf-8-sig")
     print(f"💾 포트폴리오 스냅샷(덮어쓰기) → {PORTFOLIO_CSV}", flush=True)
 
@@ -764,7 +751,7 @@ def save_holdings_snapshot(now_dt, holdings):
             "현재가": _num0(pos.get("cur_price")),
         })
 
-    # 🔁 항상 덮어쓰기 (보유 없음이어도 파일을 비운 뒤 헤더 기록)
+    # 항상 덮어쓰기 (보유 없음이어도 파일을 비운 뒤 헤더 기록)
     if rows:
         df = pd.DataFrame(rows)
     else:
@@ -935,7 +922,6 @@ def do_cancel_buys():
         print(f"✅ 전량 취소 요청 완료: 취소요청 {num}건 / 총 {total_canceled}주 취소", flush=True)
     except Exception as e:
         print(f"⚠️ 취소 처리 실패: {e}", flush=True)
-    # ❌ 요청에 따라 14:55 취소 직후 조기 종료 점검 제거
 
 def do_force_sell_and_snapshot():
     # 15:00 스냅샷 먼저, 그 다음 전량 매도
@@ -993,7 +979,7 @@ def _pick_bid_price(orderbook: dict, level: int):
 
 def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_map, bid_level=None):
     level = PREOPEN_BID_LEVEL if bid_level is None else int(bid_level)
-    print(f"▶ [장전] 매수호가{level} 지정가 매수 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}% / 상한 {MAX_PER_STOCK_BUDGET:,}/종목)", flush=True)
+    print(f"▶ [장전] 매수호가{level} 지정가 매수 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}%)", flush=True)
     today_str = datetime.now().strftime("%Y%m%d")
     ban_keywords = ["매매불가", "거래불가", "거래정지", "주문거절", "매매 금지", "거래 금지"]
     for code in buy_codes:
@@ -1005,7 +991,7 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
         prev_tv = prev_tv_map.get(code)
         if not prev_tv or prev_tv <= 0:
             print(f"  ❌ 전일 거래대금 없음/0: {code} → 스킵", flush=True); continue
-        invest_amt = min(prev_tv * INVEST_RATE_FROM_PREV_TV, MAX_PER_STOCK_BUDGET)
+        invest_amt = prev_tv * INVEST_RATE_FROM_PREV_TV  
         ob = get_orderbook_top2(code); ob["code"] = code
         price, price_src = _pick_bid_price(ob, level)
         if not price or price <= 0:
@@ -1015,7 +1001,6 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
             print(f"  ❌ 계산된 수량=0 (invest={invest_amt:,.0f}, price={price}): {code}", flush=True); continue
         psbl = inquire_psbl_order(code, price=price, ord_dvsn="00", include_cma="Y", include_ovrs="N")
         msg = psbl.get("msg", "")
-        # ❗ 장 종료 메시지 감지 시에도 즉시 종료하지 않음(요청사항)
         if is_market_closed_msg(msg):
             print("⛔ 시장 종료 메시지 감지(주문가능 응답) — 종료하지 않고 스킵/계속 진행", flush=True)
         if any(k in msg for k in ban_keywords):
@@ -1032,7 +1017,6 @@ def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_ma
         need_approx = price * qty
         print(f"  🟩 [장전] 매수 00 요청: {code} x{qty} @ {price} (src={price_src}, 필요자금≈{need_approx:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
         log_trade(datetime.now(), code, price, qty, "매수", result)
-        # ❗ 매수 응답에서도 장 종료 감지 시 즉시 종료하지 않음
         if is_market_closed_msg(msg2):
             print("⛔ 시장 종료 메시지 감지(매수 응답) — 종료하지 않고 계속 진행", flush=True)
         if str(result.get("rt_cd")) == "0":
@@ -1137,15 +1121,6 @@ def main():
 
     # 전일 거래대금 map
     prev_tv_map = build_prev_trading_value_map(today_candidates)
-
-    # 시작 기준 총평가금액 (참고용)
-    global INITIAL_TOT_EVAL
-    try:
-        summary0 = get_account_summary()
-        INITIAL_TOT_EVAL = _num0(summary0.get("tot_evlu_amt"))
-        print(f"🧭 시작 기준 총평가금액 = {INITIAL_TOT_EVAL:,.0f}", flush=True)
-    except:
-        INITIAL_TOT_EVAL = None
 
     # 상태 로드
     today_str = datetime.now().strftime("%Y%m%d")
