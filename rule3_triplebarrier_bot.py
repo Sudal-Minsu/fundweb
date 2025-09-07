@@ -13,6 +13,7 @@ import pandas as pd
 from pandas.tseries.offsets import BDay
 from datetime import time as dtime
 from typing import Optional, Tuple, Dict
+from config_ko import get_api_keys, ACCOUNT_INFO
 
 # ===== 주문/루프 슬립 설정 =====
 SLEEP_BETWEEN_BUYS  = 1.5   # 매수 주문 간 최소 대기(초)
@@ -29,6 +30,11 @@ HOLDINGS_CSV   = os.path.join(RESULT_DIR, "holdings.csv")
 TRADES_CSV   = os.path.join(RESULT_DIR, "trades_log.csv")
 EQUITY_CSV   = os.path.join(RESULT_DIR, "equity_log.csv")
 EQUITY_SNAPSHOT_SEC = 3600  # 1시간마다 스냅샷(초). 체결 시엔 즉시 1회 추가 스냅샷
+
+# ✅ NEW: 초기자산/포트폴리오 CSV 경로
+INITIAL_EQUITY_FILE = os.path.join(RESULT_DIR, "initial_equity.json")
+PORT_SUMMARY_CSV    = os.path.join(RESULT_DIR, "portfolio_summary.csv")
+PORT_HOLDINGS_CSV   = os.path.join(RESULT_DIR, "portfolio_holdings.csv")
 
 MIN_PRICE_KRW  = 1000      # 1000원 미만 매수 금지
 CLOSE_HH       = 15        # 시간 배리어(장마감) 기준 시각
@@ -47,15 +53,33 @@ K_MAX       = 4      # 동시 보유 종목 수(슬롯 수)
 HORIZON     = 6      # 보유 기간(영업일)
 
 # ========== 인증/계좌 (VTS) ==========
-APP_KEY       = "PSXtsebcvZLq1ZKGsppEYYxCd0RoOd48INlF"
-APP_SECRET    = "pnPjHI+nULtuBz3jTzPhvBQY+9VKfMCql6lN3btyp19EGhi1hALeHrPjhsFj016eaGqACCcDWdZ3ivhNOIVhBZRATrHdiTk8L8uCxVNQn3qpWSk+54SQ/XMCyJvVpUSaPiRBf+n0iSu7blyUjBxQgt9zBMUvBB23ylyMg8yrWCDJZpgQXM4="
-CANO          = "50150860"
-ACNT_PRDT_CD  = "01"
+app_key, app_secret = get_api_keys()
+CANO          = ACCOUNT_INFO['CANO']
+ACNT_PRDT_CD  = ACCOUNT_INFO["ACNT_PRDT_CD"]
 BASE_URL      = "https://openapivts.koreainvestment.com:29443"  # VTS 서버
 
-ACCOUNT_INFO = {"CANO": CANO, "ACNT_PRDT_CD": ACNT_PRDT_CD}
 
 # ========== 공통 유틸 ==========
+# ✅ NEW
+def _load_initial_equity() -> Optional[float]:
+    if os.path.exists(INITIAL_EQUITY_FILE):
+        try:
+            j = json.load(open(INITIAL_EQUITY_FILE, "r", encoding="utf-8"))
+            v = float(j.get("initial_equity", 0.0))
+            return v if v > 0 else None
+        except Exception:
+            return None
+    return None
+
+# ✅ NEW
+def _save_initial_equity(val: float):
+    try:
+        with open(INITIAL_EQUITY_FILE, "w", encoding="utf-8") as f:
+            json.dump({"initial_equity": float(val), "ts": str(now_kst())}, f, ensure_ascii=False)
+    except Exception as e:
+        print("[EQUITY] 초기자산 저장 실패:", e)
+
+
 def _sleep_with_jitter(base_sec: float):
     if base_sec <= 0:
         return
@@ -70,11 +94,16 @@ def now_kst():
 def ensure_log_files():
     os.makedirs(RESULT_DIR, exist_ok=True)
     if not os.path.exists(TRADES_CSV):
-        cols = ["ts","side","code","qty","price","reason","odno","tp_px","sl_px","cash_after"]
+        # ✅ 주문종류/현재가 등 ‘국문 별칭 컬럼’도 동시 기록
+        cols = ["ts","side","code","qty","price","reason","odno","tp_px","sl_px","cash_after",
+                "거래시간","주문종류","종목코드","주문수량","현재가"]
         pd.DataFrame(columns=cols).to_csv(TRADES_CSV, index=False, encoding="utf-8")
+
     if not os.path.exists(EQUITY_CSV):
-        cols = ["ts","cash","positions_value","equity"]
+        # ✅ 누적수익률(cum_return), 총손익(total_pnl) 컬럼 추가
+        cols = ["ts","cash","positions_value","equity","cum_return","total_pnl"]
         pd.DataFrame(columns=cols).to_csv(EQUITY_CSV, index=False, encoding="utf-8")
+
 
 def ensure_files():
     os.makedirs(RESULT_DIR, exist_ok=True)
@@ -123,9 +152,13 @@ def log_trade(side: str, code: str, qty: int, price: float, reason: str, odno: O
     try:
         df = pd.read_csv(TRADES_CSV)
     except Exception:
-        df = pd.DataFrame(columns=["ts","side","code","qty","price","reason","odno","tp_px","sl_px","cash_after"])
+        df = pd.DataFrame(columns=["ts","side","code","qty","price","reason","odno","tp_px","sl_px","cash_after",
+                                   "거래시간","주문종류","종목코드","주문수량","현재가"])
+
+    ts_now = now_kst().tz_localize(None)
     row = {
-        "ts": now_kst().tz_localize(None),
+        # 기존 영문 키
+        "ts": ts_now,
         "side": side,
         "code": str(code).zfill(6) if code else "",
         "qty": int(qty) if qty is not None else 0,
@@ -134,10 +167,22 @@ def log_trade(side: str, code: str, qty: int, price: float, reason: str, odno: O
         "odno": odno or "",
         "tp_px": float(tp_px) if tp_px is not None else None,
         "sl_px": float(sl_px) if sl_px is not None else None,
-        "cash_after": float(cash_after) if cash_after is not None else None
+        "cash_after": float(cash_after) if cash_after is not None else None,
+        # ✅ 국문 표제(요청 칼럼): 거래시간, 종목코드, 주문수량, 주문종류, 현재가
+        "거래시간": ts_now,
+        "주문종류": side,
+        "종목코드": str(code).zfill(6) if code else "",
+        "주문수량": int(qty) if qty is not None else 0,
+        "현재가": float(price) if price is not None else 0.0,
     }
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+    # (과거 파일과 컬럼 수 불일치 시 자동 정렬)
+    for c in row.keys():
+        if c not in df.columns:
+            df[c] = pd.NA
+    df = pd.concat([df, pd.DataFrame([row])[df.columns]], ignore_index=True)
     df.to_csv(TRADES_CSV, index=False, encoding="utf-8")
+
 
 # ========== 보유행 추가/병합 ==========
 def add_position(code, qty, entry_date, entry_px, tp_pct, sl_pct, horizon_days, order_id_buy=None):
@@ -480,6 +525,81 @@ def check_account(access_token, app_key, app_secret):
     res2 = output2[0] if output2 else {}
     return res1, res2
 
+# ✅ NEW: 보유/요약 CSV 내보내기
+def export_portfolio_csvs(access_token, app_key, app_secret):
+    """
+    1) portfolio_summary.csv
+       - 보유주식 평가금액(positions_value), 총 매수금액(total_cost), 평가손익(pnl),
+         예수금(cash), 총 평가자산(equity)
+    2) portfolio_holdings.csv
+       - 종목코드, 보유수량, 매입단가, 현재가, 평가금액, 평가손익
+    """
+    # 계좌/보유 현황
+    holdings_df, out2 = check_account(access_token, app_key, app_secret)
+    cash = to_float((out2 or {}).get("dnca_tot_amt", 0.0))
+
+    # holdings가 비어있으면 빈 파일 초기화
+    if holdings_df is None or holdings_df.empty:
+        pd.DataFrame(columns=["ts","positions_value","total_cost","pnl","cash","equity"])\
+          .to_csv(PORT_SUMMARY_CSV, index=False, encoding="utf-8")
+        pd.DataFrame(columns=["ts","종목코드","보유수량","매입단가","현재가","평가금액","평가손익"])\
+          .to_csv(PORT_HOLDINGS_CSV, index=False, encoding="utf-8")
+        return
+
+    # 현재가 가져와 평가
+    rows = []
+    positions_value = 0.0
+    total_cost = 0.0
+
+    for _, r in holdings_df.iterrows():
+        code = str(r["종목코드"]).zfill(6)
+        qty  = int(r["보유수량"])
+        avg  = float(r["매입단가"])
+
+        cur = get_current_price(access_token, app_key, app_secret, BASE_URL, code) or 0.0
+        mv  = float(qty) * float(cur)
+        cost = float(qty) * float(avg)
+        pnl = mv - cost
+
+        rows.append({
+            "ts": now_kst().tz_localize(None),
+            "종목코드": code,
+            "보유수량": qty,
+            "매입단가": avg,
+            "현재가": cur,
+            "평가금액": mv,
+            "평가손익": pnl
+        })
+        positions_value += mv
+        total_cost += cost
+        _sleep_with_jitter(0.15)  # 시세 API 간격
+
+    equity = cash + positions_value
+    summary_row = {
+        "ts": now_kst().tz_localize(None),
+        "positions_value": positions_value,
+        "total_cost": total_cost,
+        "pnl": positions_value - total_cost,
+        "cash": cash,
+        "equity": equity
+    }
+
+    # 저장(append)
+    try:
+        sdf = pd.read_csv(PORT_SUMMARY_CSV)
+    except Exception:
+        sdf = pd.DataFrame(columns=["ts","positions_value","total_cost","pnl","cash","equity"])
+    sdf = pd.concat([sdf, pd.DataFrame([summary_row])], ignore_index=True)
+    sdf.to_csv(PORT_SUMMARY_CSV, index=False, encoding="utf-8")
+
+    try:
+        hdf = pd.read_csv(PORT_HOLDINGS_CSV)
+    except Exception:
+        hdf = pd.DataFrame(columns=["ts","종목코드","보유수량","매입단가","현재가","평가금액","평가손익"])
+    hdf = pd.concat([hdf, pd.DataFrame(rows)], ignore_index=True)
+    hdf.to_csv(PORT_HOLDINGS_CSV, index=False, encoding="utf-8")
+
+
 def get_cash_balance(access_token, app_key, app_secret) -> float:
     res1, res2 = check_account(access_token, app_key, app_secret)
     if res2 is None:
@@ -546,33 +666,57 @@ def export_equity_png(out_path: str = os.path.join(RESULT_DIR, "equity_curve.png
 
 _last_equity_snap = 0.0
 def maybe_snapshot_equity(access_token, app_key, app_secret, force: bool=False):
-    """주기적으로 에쿼티 커브 저장 + PNG 갱신 + HEARTBEAT 로그"""
+    """주기적으로 에쿼티 커브 저장 + PNG 갱신 + HEARTBEAT 로그
+       ✅ 누적수익률/총손익 컬럼 추가
+       ✅ 포트폴리오 CSV 2종 동시 업데이트
+    """
     global _last_equity_snap
     now_sec = time.time()
     if not force and (now_sec - _last_equity_snap) < EQUITY_SNAPSHOT_SEC:
         return
 
     cash, pv, eq = _portfolio_valuation(access_token, app_key, app_secret)
+
+    # 초기자산 로드/저장
+    init_eq = _load_initial_equity()
+    if init_eq is None or init_eq <= 0:
+        _save_initial_equity(eq)
+        init_eq = eq
+
+    cum_ret = (eq / init_eq - 1.0) if init_eq > 0 else 0.0
+    total_pnl = eq - init_eq
+
     try:
         df = pd.read_csv(EQUITY_CSV)
     except Exception:
-        df = pd.DataFrame(columns=["ts","cash","positions_value","equity"])
+        df = pd.DataFrame(columns=["ts","cash","positions_value","equity","cum_return","total_pnl"])
+
     row = {
         "ts": now_kst().tz_localize(None),
         "cash": cash,
         "positions_value": pv,
-        "equity": eq
+        "equity": eq,
+        "cum_return": cum_ret,
+        "total_pnl": total_pnl
     }
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    # (과거 컬럼 호환)
+    for c in row.keys():
+        if c not in df.columns:
+            df[c] = pd.NA
+    df = pd.concat([df, pd.DataFrame([row])[df.columns]], ignore_index=True)
     df.to_csv(EQUITY_CSV, index=False, encoding="utf-8")
     _last_equity_snap = now_sec
 
     # 스냅샷 직후 PNG 갱신
     export_equity_png(os.path.join(RESULT_DIR, "equity_curve.png"))
 
+    # ✅ 포트폴리오 CSV 2종도 함께 업데이트
+    export_portfolio_csvs(access_token, app_key, app_secret)
+
     # 1시간마다 trades_log에도 HEARTBEAT 남김
     log_trade(side="SNAP", code="", qty=0, price=0.0, reason="HEARTBEAT", odno="",
               tp_px=None, sl_px=None, cash_after=cash)
+
 
 # ========== 브로커 보유 맵/스테일 정리 ==========
 def _broker_positions_map(access_token, app_key, app_secret) -> Dict[str, Tuple[int, float]]:
