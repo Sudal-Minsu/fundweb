@@ -13,23 +13,22 @@ from config_choi import DB_CONFIG, get_api_keys, ACCOUNT_INFO
 OUTPUT_DIR = "rule_2_결과"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 종목당 투자금: 전일 거래대금의 0.25% 
-INVEST_RATE_FROM_PREV_TV = 0.0025     # 0.25%
+# 종목당 투자금: 전일 거래대금의 0.25%
+INVEST_RATE_FROM_PREV_TV = 0.0025
 
 # ───────────── 시간 상수 ─────────────
-CANCEL_BUY_TIME   = dtime(14, 55)      # 매수 미체결 취소 시각
-MARKET_CLOSE_TIME = dtime(15, 30)      # 15:30 마감 집계/종료
+CANCEL_BUY_TIME   = dtime(14, 55)
+MARKET_CLOSE_TIME = dtime(15, 30)
 
-# 장전 BID 레벨(1=매수호가1, 2=매수호가2 …)
-PREOPEN_BID_LEVEL = 1
-PREOPEN_BID_TIME  = dtime(8, 59, 30)   # 08:59:30 정확 기상
+# 09:00 매수 트리거 시간
+OPEN_BUY_TIME     = dtime(9, 0, 0)
 
-# 스냅샷 시각 (정확 기상)
-SNAP_0900_TIME = dtime(9, 0, 10)       # 09:00:10 정확 기상
-SNAP_1500_TIME = dtime(15, 0, 0)       # 15:00:00 정확 기상
+# 스냅샷 시각
+SNAP_0900_TIME = dtime(9, 30, 0)
+SNAP_1500_TIME = dtime(15, 0, 0)
 
 # 15:00 이후 조기 종료 체크 주기(초)
-POST_SELL_CHECK_INTERVAL_SEC = 5 * 60  # 5분
+POST_SELL_CHECK_INTERVAL_SEC = 5 * 60
 
 # 상태 파일
 BOUGHT_TODAY_PATH       = os.path.join(OUTPUT_DIR, "bought_today.json")
@@ -145,23 +144,18 @@ def send_cancel_order_throttled(*, ord_orgno, orgn_odno, ord_dvsn, qty_all=True,
 
 # ───────────── 정시 기상 헬퍼 ─────────────
 def wait_until(target_dt: datetime):
-    """
-    target_dt (local time)까지 블로킹 대기.
-    OS 스케줄링/파이썬 해상도를 고려해, 큰 간격은 크게 자고, 마지막 0.5s는 더 촘촘히 접근.
-    """
     while True:
         now = datetime.now()
         remaining = (target_dt - now).total_seconds()
         if remaining <= 0:
             return
         if remaining > 60:
-            time.sleep(remaining - 59.5)  # 한 번에 크게 당기기
+            time.sleep(remaining - 59.5)
         elif remaining > 1:
             time.sleep(remaining - 0.5)
         elif remaining > 0.05:
             time.sleep(remaining - 0.01)
         else:
-            # 50ms 이내면 즉시
             return
 
 # ───────────── ATR14% 계산용 DB 접근 ─────────────
@@ -245,19 +239,20 @@ def get_prev_trading_value_from_db(code):
                 FROM stock_data
                 WHERE (Code = %s OR Code = LPAD(%s, 6, '0') OR Code = CAST(%s AS UNSIGNED))
                 ORDER BY Date DESC
-                LIMIT 2
+                LIMIT 1
             """
             c_int = int(code6)
             cur.execute(sql, (code6, code6, c_int))
             rows = cur.fetchall()
-            if len(rows) < 2:
+            if not rows:
                 return None
-            _, _, close_prev, vol_prev = rows[1]
-            close_prev = _num(close_prev)
-            vol_prev = _num(vol_prev)
-            if close_prev is None or vol_prev is None:
+
+            _, _, close_val, vol_val = rows[0]  # 최신 = 전일
+            close_val = _num(close_val)
+            vol_val   = _num(vol_val)
+            if close_val is None or vol_val is None:
                 return None
-            return float(close_prev) * float(vol_prev)
+            return float(close_val) * float(vol_val)
     finally:
         conn.close()
 
@@ -269,6 +264,7 @@ def build_prev_trading_value_map(codes):
     return out
 
 # ───────────── 시세/주문 ─────────────
+# 현재가는 수량 계산용 근사로 사용
 def get_quote(stock_code):
     ensure_session()
     throttle_reads()
@@ -279,56 +275,19 @@ def get_quote(stock_code):
         "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": "FHKST01010100"
     }
-    params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": stock_code}
-    res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
-    try:
-        j = res.json()
-    except:
-        print(f"❌ 시세 조회 실패: {stock_code} / {res.text}", flush=True)
-        return None, None, None
-    if res.status_code != 200 or 'output' not in j:
-        print(f"❌ 시세 조회 실패: {stock_code} / {res.text}", flush=True)
-        return None, None, None
-    out = j['output']
-    to_int = lambda x: int(str(x).replace(",", "").strip()) if x not in (None, "") else None
-    cur  = to_int(out.get('stck_prpr'))
-    ask1 = to_int(out.get('askp1') or out.get('askp'))
-    bid1 = to_int(out.get('bidp1') or out.get('bidp'))
-    return cur, ask1, bid1
-
-def get_orderbook_top2(stock_code):
-    ensure_session()
-    throttle_reads()
-    url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/quotations/inquire-asking-price"
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {SESSION['access_token']}",
-        "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
-        "tr_id": "FHKST01010200"
-    }
     params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": str(stock_code).zfill(6)}
-    res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+    res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
+    if res.status_code != 200:
+        return None, None, None
     try:
         j = res.json()
-        out = (j or {}).get("output", {}) or {}
+        out = (j.get("output") or j.get("output1") or j.get("output2") or {})
+        if isinstance(out, list) and out: out = out[0]
+        cur = out.get("stck_prpr") or out.get("prpr")
+        cur = int(str(cur).replace(",","")) if cur not in (None, "", "null") else None
+        return cur, None, None
     except:
-        print(f"❌ 호가 조회 실패: {stock_code} / {res.text}", flush=True)
-        return {"ask1": None, "ask2": None, "bid1": None, "bid2": None}
-
-    def to_int(x):
-        try:
-            s = str(x).replace(",", "").strip()
-            if not s:
-                return None
-            return int(float(s))
-        except:
-            return None
-
-    ask1 = to_int(out.get("askp1") or out.get("askp_1"))
-    ask2 = to_int(out.get("askp2") or out.get("askp_2"))
-    bid1 = to_int(out.get("bidp1") or out.get("bidp_1"))
-    bid2 = to_int(out.get("bidp2") or out.get("bidp_2"))
-    return {"ask1": ask1, "ask2": ask2, "bid1": bid1, "bid2": bid2}
+        return None, None, None
 
 def get_current_price(stock_code):
     cur, _, _ = get_quote(stock_code); return cur
@@ -337,7 +296,7 @@ def get_hashkey(data):
     ensure_session()
     url = f"{SESSION['url_base']}/uapi/hashkey"
     headers = {"Content-Type": "application/json", "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"]}
-    res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.2)
+    res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.0)
     try:
         return res.json().get("HASH", "")
     except:
@@ -347,7 +306,6 @@ def send_order(stock_code, price, qty, order_type="매수", ord_dvsn="00"):
     """
     - 매수: 04(최우선지정가) → ORD_UNPR=0
     - 매도: 01(시장가)      → ORD_UNPR=0
-    - 지정가(00)           → ORD_UNPR=price 사용
     """
     ensure_session()
     url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/order-cash"
@@ -366,7 +324,7 @@ def send_order(stock_code, price, qty, order_type="매수", ord_dvsn="00"):
         "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": tr_id, "hashkey": get_hashkey(data)
     }
-    res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.2)
+    res = requests.post(url, headers=headers, data=json.dumps(data)); time.sleep(1.0)
     try: return res.json()
     except: return {"rt_cd": "-1", "msg1": res.text}
 
@@ -389,7 +347,7 @@ def send_cancel_order(ord_orgno, orgn_odno, ord_dvsn, qty_all=True, qty=0):
         "appKey": SESSION["app_key"], "appSecret": SESSION["app_secret"],
         "tr_id": tr_id, "hashkey": get_hashkey(params),
     }
-    res = requests.post(url, headers=headers, data=json.dumps(params)); time.sleep(1.2)
+    res = requests.post(url, headers=headers, data=json.dumps(params)); time.sleep(1.0)
     try: return res.json()
     except: return {"rt_cd": "-1", "msg1": res.text}
 
@@ -414,7 +372,7 @@ def list_cancelable_buy_orders():
         out = []
         while True:
             throttle_reads()
-            res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+            res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
             j = res.json()
             rows = j.get("output2") or j.get("output") or []
             for r in rows:
@@ -486,7 +444,7 @@ def get_all_holdings():
             "CTX_AREA_NK100": nk,
         }
         throttle_reads()
-        res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+        res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
         j = res.json()
         for item in (j.get("output1") or []):
             code = str(item.get("pdno", "")).zfill(6)
@@ -531,7 +489,7 @@ def get_today_orders():
     items = []
     while True:
         throttle_reads()
-        res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+        res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
         j = res.json()
         items.extend(j.get("output1", []) or [])
         if j.get("tr_cont", "F") != "M": break
@@ -564,42 +522,19 @@ def get_open_sell_qty_for_code(today_orders, code: str) -> int:
         if gap>open_qty: open_qty=gap
     return int(open_qty)
 
-# ───────────── 매수 보조/취소 보조 ─────────────
-def refresh_avg_after_buy(code, tries=3, delay=1.5):
-    """
-    매수 직후 잔고 반영을 몇 번 재확인.
-    """
-    for _ in range(tries):
-        time.sleep(delay)
-        acct = get_all_holdings()
-        if code in acct:
-            qty  = acct[code].get("qty", 0)
-            avg  = acct[code].get("avg_price", None)
-            if qty > 0 and avg and avg > 0:
-                print(f"    ↪ 매수 반영됨: {code} qty={qty} avg={avg}", flush=True)
-                return True
-    print(f"    ↪ 매수 직후 평균가 미확인: {code} (다음 일정에서 동기화)", flush=True)
-    return False
-
 # === [취소 로그 모드] 간결하게만 출력 ===
 CANCEL_LOG_CONCISE = True
 
 def _get_rmn_from_row(o):
-    """inquire-daily-ccld row에서 잔량 추출"""
     return int(_num0(o.get("rmn_qty") or o.get("unerc_qty")))
 
 def get_remaining_qty_by_odno(orders, odno: str) -> int:
-    """ODNO로 현재 잔량 조회 (없으면 0으로 간주)"""
     for o in orders or []:
         if str(o.get("odno") or o.get("ODNO") or "").strip() == str(odno).strip():
             return _get_rmn_from_row(o)
     return 0
 
 def cancel_and_report(item):
-    """
-    item: {"pdno","odno","krx_fwdg_ord_orgno","ord_dvsn","rmn_qty"}
-    - 취소 요청 → 당일주문 재조회로 실제 취소수량 확인 및 로그 출력
-    """
     code = item.get("pdno")
     odno = item.get("odno")
     before_rmn = int(item.get("rmn_qty", 0))
@@ -612,7 +547,7 @@ def cancel_and_report(item):
     )
 
     # 반영 딜레이 대비
-    time.sleep(1.2)
+    time.sleep(1.0)
     after_orders = get_today_orders()
     after_rmn = get_remaining_qty_by_odno(after_orders, odno)
     canceled = max(0, before_rmn - after_rmn)
@@ -634,7 +569,11 @@ def calc_pnl_pct(avg, cur):
     except: return None
 
 INQUIRE_PSBL_TR_ID = "VTTC8908R"  # 모의투자용. 실계좌는 "TTTC8908R"
+
 def inquire_psbl_order(stock_code, price, ord_dvsn="04", include_cma="Y", include_ovrs="N"):
+    """
+    주문가능 조회. 최우선/시장가/시간외 등은 ORD_UNPR=0, 그 외는 지정가 가격 사용.
+    """
     ensure_session()
     throttle_reads()
     url = f"{SESSION['url_base']}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
@@ -645,16 +584,19 @@ def inquire_psbl_order(stock_code, price, ord_dvsn="04", include_cma="Y", includ
         "appSecret": SESSION["app_secret"],
         "tr_id": INQUIRE_PSBL_TR_ID,
     }
+    price_free_types = {"01","03","04","11","12","13","14","15","16"}
+    ord_unpr = "0" if str(ord_dvsn) in price_free_types else str(int(max(1, int(price or 0))))
+
     params = {
         "CANO": ACCOUNT_INFO["CANO"],
         "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
         "PDNO": str(stock_code).zfill(6),
-        "ORD_UNPR": str(int(price)),
+        "ORD_UNPR": ord_unpr,
         "ORD_DVSN": str(ord_dvsn),
         "CMA_EVLU_AMT_ICLD_YN": include_cma,
         "OVRS_ICLD_YN": include_ovrs,
     }
-    res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+    res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
     j = res.json()
     out = (j or {}).get("output", {}) or {}
     def _i(x):
@@ -684,7 +626,7 @@ def get_account_summary():
               "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02", "UNPR_DVSN": "01",
               "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N",
               "PRCS_DVSN": "01", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
-    res = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+    res = requests.get(url, headers=headers, params=params); time.sleep(1.0)
     j = res.json(); out2 = (j.get("output2") or [{}])
     return out2[0] if out2 else {}
 
@@ -707,39 +649,27 @@ def append_daily_pnl(now_dt, total_eval_amount):
     print(f"🧾 집계 저장 → {DAILY_PNL_CSV} (총평가금액={total_eval_amount:,.0f}, 누적수익률={pct_str})", flush=True)
 
 def save_portfolio_snapshot(now_dt, holdings, summary=None):
-    """
-    포트폴리오.csv는 매번 '덮어쓰기' 모드로 저장합니다.
-    보유종목 열은 제거하고, 예수금(dnca_tot_amt)을 평가손익금액과 총평가금액 사이에 추가합니다.
-    """
     if summary is None:
         try:
             summary = get_account_summary()
         except Exception:
             summary = {}
-    def _f(key):  # summary(output2[0])의 수치를 float으로 안전 변환
+    def _f(key):
         return _num0((summary or {}).get(key))
-
-    # 열 구성(순서 보장): date, time, 평가금액, 매입금액, 평가손익금액, 예수금, 총평가금액
     row = {
         "date": now_dt.strftime("%Y-%m-%d"),
         "time": now_dt.strftime("%H:%M:%S"),
         "평가금액": _f("scts_evlu_amt"),
         "매입금액": _f("pchs_amt_smtl_amt"),
         "평가손익금액": _f("evlu_pfls_smtl_amt"),
-        "예수금": _f("dnca_tot_amt"),        
+        "예수금": _f("dnca_tot_amt"),
         "총평가금액": _f("tot_evlu_amt"),
     }
     df = pd.DataFrame([row])
-
-    # 항상 덮어쓰기
     df.to_csv(PORTFOLIO_CSV, mode="w", index=False, encoding="utf-8-sig")
-    print(f"💾 포트폴리오 스냅샷(덮어쓰기) → {PORTFOLIO_CSV}", flush=True)
+    print(f"💾 포트폴리오 스냅샷 → {PORTFOLIO_CSV}", flush=True)
 
 def save_holdings_snapshot(now_dt, holdings):
-    """
-    보유종목.csv도 매번 '덮어쓰기' 모드로 저장합니다.
-    보유종목이 없으면 빈 테이블 헤더만 쓰면서 기존 파일을 지웁니다.
-    """
     rows = []
     for code, pos in (holdings or {}).items():
         rows.append({
@@ -750,16 +680,13 @@ def save_holdings_snapshot(now_dt, holdings):
             "매입평균가격": _num0(pos.get("avg_price")),
             "현재가": _num0(pos.get("cur_price")),
         })
-
-    # 항상 덮어쓰기 (보유 없음이어도 파일을 비운 뒤 헤더 기록)
     if rows:
         df = pd.DataFrame(rows)
     else:
-        print("ℹ️ 보유 내역 없음: 빈 보유종목 파일로 덮어쓰기", flush=True)
+        print("ℹ️ 보유 내역 없음: 빈 보유종목 파일로 저장", flush=True)
         df = pd.DataFrame(columns=["date","time","종목코드","보유수량","매입평균가격","현재가"])
-
     df.to_csv(HOLDINGS_CSV, mode="w", index=False, encoding="utf-8-sig")
-    print(f"💾 보유종목 스냅샷(덮어쓰기) → {HOLDINGS_CSV}", flush=True)
+    print(f"💾 보유종목 스냅샷 → {HOLDINGS_CSV}", flush=True)
 
 # ───────────── 로그 ─────────────
 def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra=None):
@@ -780,43 +707,83 @@ def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra
         row_df.to_csv(log_file, index=False, encoding="utf-8-sig")
 
 # ───────────── 조기 종료 관련 유틸 ─────────────
-def has_open_orders(today_orders):
+def has_open_orders(today_orders=None):
+    """
+    미체결 주문 존재 여부 판단 (견고화 버전)
+    1) 우선 '정정/취소 가능 주문 조회'로 미체결 잔량 존재 여부 확인
+    2) 보조적으로 today_orders 스캔 (대/소문자 키 모두, 상태 문자열 확장)
+    """
+    # 1) 정정/취소 가능 주문 조회: 미체결 잔량이 있는 주문만 내려오는 것이 보통이라 여기 결과가 있으면 True
+    try:
+        cancelables = list_cancelable_buy_orders()  # 이름이 buy지만 실제로는 매수/매도 모두 들어옵니다.
+        for it in cancelables or []:
+            rmn = int(_num0(it.get("rmn_qty")))
+            if rmn > 0:
+                return True
+    except Exception:
+        # 조회 실패 시 2)로 폴백
+        pass
+
+    # 2) today_orders 스캔 (대/소문자 키, 더 넓은 '종료' 상태)
+    if not today_orders:
+        try:
+            today_orders = get_today_orders()
+        except Exception:
+            return False
+
     def _text(o, *keys):
         for k in keys:
-            v = o.get(k)
+            v = o.get(k) or o.get(k.upper())
             if isinstance(v, str) and v.strip():
                 return v.strip()
         return ""
 
-    terminal = ["거부","불가","매매불가","주문거절","취소","정정거부","오류",
-                "rejected","reject","cancel","canceled","cancelled","error","invalid"]
+    def _num_any(o, *keys):
+        for k in keys:
+            v = o.get(k) or o.get(k.upper())
+            if v is not None:
+                val = _num0(v)
+                return val
+        return 0.0
+
+    # ‘종료(터미널) 상태’ 키워드 확장
+    terminal_keywords = [
+        "거부","불가","매매불가","주문거절","취소","취소완료","전량취소","정정거부","오류",
+        "체결완료","전량체결","종료","완료",
+        "rejected","reject","cancel","canceled","cancelled","error","invalid","filled","completed","done"
+    ]
 
     for o in today_orders or []:
-        st = _text(o, "ordr_sttus_name", "ccld_dvsn_name", "ord_sttus")
-        stl = st.lower()
-        if any(k in st for k in terminal) or any(k in stl for k in terminal):
-            continue
-        if "미체결" in st:
-            return True
+        st = _text(o, "ordr_sttus_name", "ccld_dvsn_name", "ord_sttus", "ord_sttus_name", "ord_sts", "stat")
+        st_lower = st.lower()
 
-        rmn = _num0(o.get("rmn_qty")) or _num0(o.get("unerc_qty"))
+        # 종료 상태로 명확히 보이면 스킵
+        if any(k in st for k in terminal_keywords) or any(k in st_lower for k in terminal_keywords):
+            continue
+
+        # 1) API가 주는 잔량 필드 우선
+        rmn = max(int(_num_any(o, "rmn_qty", "unerc_qty")), 0)
         if rmn > 0:
             return True
 
-        ord_qty = _num0(o.get("ord_qty"))
-        c1 = _num0(o.get("tot_ccld_qty"))
-        c2 = _num0(o.get("ccld_qty"))
-        if ord_qty > 0 and max(c1, c2) < ord_qty:
-            return True
+        # 2) 보정: 주문수량 - 체결수량 (취소/완료 행을 종료로 못 알아본 케이스 대비)
+        ord_qty = _num_any(o, "ord_qty")
+        c1 = _num_any(o, "tot_ccld_qty")
+        c2 = _num_any(o, "ccld_qty")
+        gap = max(0, int(round(ord_qty - max(c1, c2))))
+        if gap > 0:
+            # 다만 '취소접수/취소완료'류인데 상태문자열이 비어 온 케이스를 더 걸러줌
+            # 취소 수량/사유 같은 필드가 있으면 종료로 간주 (있을 수도, 없을 수도)
+            cancel_hint = _text(o, "rvse_cncl_dvsn_cd", "rvsecncl_yn", "cncl_yn", "cncl_stat", "cncl_rsn")
+            if not cancel_hint:
+                return True
 
     return False
 
 def save_all_before_exit(tag="early_exit"):
     """
-    종료 전에 3종 파일 저장 보장:
-      - 평가자료.csv (append_daily_pnl)
-      - 포트폴리오.csv (save_portfolio_snapshot)
-      - 보유종목.csv (save_holdings_snapshot)
+    조기/마감 종료 직전 저장. (요청에 따라 포트폴리오/보유종목 저장 생략)
+    - 15:00에 이미 스냅샷을 저장하므로 여기서는 '평가자료.csv'만 append.
     """
     now = datetime.now()
     try:
@@ -828,24 +795,10 @@ def save_all_before_exit(tag="early_exit"):
         append_daily_pnl(now, total_eval_amount)
     except Exception as e:
         print(f"⚠️ 평가자료 저장 오류: {e}", flush=True)
-    try:
-        holdings = get_all_holdings()
-    except Exception as e:
-        print(f"⚠️ 보유 조회 실패(스냅샷 일부 생략될 수 있음): {e}", flush=True)
-        holdings = {}
-    try:
-        save_portfolio_snapshot(now, holdings, summary=summary)
-    except Exception as e:
-        print(f"⚠️ 포트폴리오 저장 오류: {e}", flush=True)
-    try:
-        save_holdings_snapshot(now, holdings)
-    except Exception as e:
-        print(f"⚠️ 보유종목 저장 오류: {e}", flush=True)
 
     print(f"🛑 [{tag}] 조기/마감 종료 직전 저장 완료 → 종료합니다.", flush=True)
     sys.exit(0)
 
-# 15:00 이후에만 사용할 조기 종료 체크(5분 간격)
 def monitor_after_3pm_for_idle_exit():
     print("🕒 15:00 이후 5분 간격 모니터링 시작 (조건: 미체결 없음 AND 주식 평가금액=0) …", flush=True)
     end_dt = datetime.combine(datetime.now().date(), MARKET_CLOSE_TIME)
@@ -863,165 +816,73 @@ def monitor_after_3pm_for_idle_exit():
             eval_amount = _num0(summary.get("scts_evlu_amt"))
         except Exception:
             eval_amount = 0.0
-
         no_open = not has_open_orders(today_orders)
         print(f"   · 체크 @ {now.strftime('%H:%M:%S')} → 미체결없음={no_open}, 주식평가금액={eval_amount:,.0f}", flush=True)
         if no_open and eval_amount == 0:
             save_all_before_exit(tag="post_3pm_idle")
-
-        # 다음 체크까지 대기 (마감까지 남은 시간과 5분 중 작은 값)
         remaining = (end_dt - now).total_seconds()
         sleep_s = max(1, min(POST_SELL_CHECK_INTERVAL_SEC, remaining))
         time.sleep(sleep_s)
 
-# ───────────── 이벤트 핸들러 ─────────────
-def do_preopen_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map):
-    print("▶ [정시] 08:59:30 장전 지정가 매수 시작", flush=True)
-    preopen_bid_buy_once(today_candidates, bought_today, not_tradable_today, prev_tv_map, bid_level=PREOPEN_BID_LEVEL)
-
-def do_snapshot(tag=""):
-    now = datetime.now()
-    holdings = get_all_holdings()
-    try:
-        summary = get_account_summary()
-    except Exception:
-        summary = None
-    print(f"📸 스냅샷({tag})", flush=True)
-    save_portfolio_snapshot(now, holdings, summary=summary)
-    save_holdings_snapshot(now, holdings)
-    # ❌ 요청에 따라 09:00 스냅 이후 조기 종료 점검 제거
-
-def do_cancel_buys():
-    print("🕝 [정시] 14:55 매수 미체결 전량 취소", flush=True)
-    try:
-        cancelables = list_cancelable_buy_orders()
-        to_cancel = [it for it in cancelables if it.get("is_buy") and int(it.get("rmn_qty", 0)) > 0]
-        if not to_cancel:
-            today_orders_raw = get_today_orders()
-            fb = []
-            for o in today_orders_raw or []:
-                side_txt = str(o.get("sll_buy_dvsn_cd") or o.get("sll_buy_dvsn_name") or o.get("trad_dvsn_name") or "")
-                is_buy = ("매수" in side_txt) or (str(side_txt) in ("02","2"))
-                rmn = int(_num0(o.get("rmn_qty") or o.get("unerc_qty")))
-                if not (is_buy and rmn > 0): continue
-                odno = str(o.get("odno") or o.get("ODNO") or "").strip()
-                orgno = (o.get("krx_fwdg_ord_orgno") or o.get("KRX_FWDG_ORD_ORGNO")
-                         or o.get("ord_gno_brno") or o.get("ORD_GNO_BRNO") or "")
-                ord_dvsn = str(o.get("ord_dvsn") or o.get("ORD_DVSN") or "00").strip() or "00"
-                pdno = str(o.get("pdno") or o.get("PDNO") or "").zfill(6)
-                if not (odno and orgno): continue
-                fb.append({"krx_fwdg_ord_orgno": str(orgno),"odno": str(odno),"ord_dvsn": ord_dvsn,
-                           "rmn_qty": int(rmn),"pdno": pdno,"is_buy": True})
-            to_cancel = fb
-        num = 0
-        total_canceled = 0
-        for it in to_cancel:
-            canceled, after_rmn, _ = cancel_and_report(it)
-            total_canceled += canceled
-            num += 1
-        print(f"✅ 전량 취소 요청 완료: 취소요청 {num}건 / 총 {total_canceled}주 취소", flush=True)
-    except Exception as e:
-        print(f"⚠️ 취소 처리 실패: {e}", flush=True)
-
-def do_force_sell_and_snapshot():
-    # 15:00 스냅샷 먼저, 그 다음 전량 매도
-    do_snapshot(tag="15:00")
-    now = datetime.now()
-    holdings = get_all_holdings()
-    try:
-        today_orders = get_today_orders()
-    except:
-        today_orders = []
-    for code, pos in holdings.items():
-        code = str(code).zfill(6)
-        qty = int(pos.get("qty", 0) or 0)
-        if qty <= 0:
-            continue
-        avg = pos.get("avg_price", None)
-        cur = pos.get("cur_price", None) or get_current_price(code)
-        pnl = calc_pnl_pct(avg, cur) if (avg and cur) else None
-        open_sell_qty = get_open_sell_qty_for_code(today_orders, code)
-        sellable_qty = max(0, qty - open_sell_qty)
-        if sellable_qty <= 0:
-            continue
-        reason = f"pnl={pnl:.2f}%" if pnl is not None else "force_close"
-        print(f"⛳ 15:00 전량 매도[{reason}]: {code} sellable={sellable_qty}", flush=True)
-        result = send_order_throttled(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
-        log_trade(now, code, cur or 0, sellable_qty, "매도", result)
-    print("↩️ 15:00 강제 매도 주문 발행 완료 — 5분 간격 모니터링으로 전환", flush=True)
-
-    # 15:00 이후 ~ 15:30까지 5분 간격으로 조기 종료 조건 모니터링
-    monitor_after_3pm_for_idle_exit()
-
-def do_market_close_and_exit():
-    # 마감 종료도 3종 저장 보장
-    save_all_before_exit(tag="market_close")
-
-# ───────────── 장전 매수 로직 ─────────────
-def _pick_bid_price(orderbook: dict, level: int):
-    lvl = max(1, min(10, int(level)))
-    def _cur_fallback():
-        code = orderbook.get("code", "")
-        cur, _, _ = get_quote(code) if code else (None, None, None)
-        return (int(cur) if cur else None), "cur"
-    if lvl == 1:
-        price = orderbook.get("bid1")
-        if price and price > 0:
-            return price, "bid1"
-        return _cur_fallback()
-    price = orderbook.get(f"bid{lvl}")
-    if price and price > 0:
-        return price, f"bid{lvl}"
-    price = orderbook.get("bid1")
-    if price and price > 0:
-        return price, "bid1"
-    return _cur_fallback()
-
-def preopen_bid_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_map, bid_level=None):
-    level = PREOPEN_BID_LEVEL if bid_level is None else int(bid_level)
-    print(f"▶ [장전] 매수호가{level} 지정가 매수 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}%)", flush=True)
+# ───────────── 09:00 최우선지정가 매수 로직 ─────────────
+def open_moo_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_map):
+    """
+    09:00에 1회 실행: 최우선지정가(04)로 매수
+    - 수량 계산은 현재가로 근사(주문 자체는 ORD_UNPR=0)
+    """
+    print(f"▶ [09:00] 매수 시작 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}%)", flush=True)
     today_str = datetime.now().strftime("%Y%m%d")
     ban_keywords = ["매매불가", "거래불가", "거래정지", "주문거절", "매매 금지", "거래 금지"]
+
     for code in buy_codes:
         code = _z6(code)
         if code in not_tradable_today:
             print(f"  ↪ 오늘 매매불가 스킵: {code}", flush=True); continue
         if code in bought_today:
             print(f"  ↪ 오늘 이미 매수/보유 이력 있어 스킵: {code}", flush=True); continue
+
         prev_tv = prev_tv_map.get(code)
         if not prev_tv or prev_tv <= 0:
             print(f"  ❌ 전일 거래대금 없음/0: {code} → 스킵", flush=True); continue
-        invest_amt = prev_tv * INVEST_RATE_FROM_PREV_TV  
-        ob = get_orderbook_top2(code); ob["code"] = code
-        price, price_src = _pick_bid_price(ob, level)
-        if not price or price <= 0:
-            print(f"  ❌ 유효 가격 없음: {code}", flush=True); continue
-        strategy_qty = int(invest_amt // price)
+
+        # 수량 산출용 현재가(근사) 확보
+        cur = get_current_price(code)
+        if not cur or cur <= 0:
+            print(f"  ❌ 현재가 조회 실패: {code} → 스킵", flush=True); continue
+
+        invest_amt = prev_tv * INVEST_RATE_FROM_PREV_TV
+        strategy_qty = int(invest_amt // cur)
         if strategy_qty <= 0:
-            print(f"  ❌ 계산된 수량=0 (invest={invest_amt:,.0f}, price={price}): {code}", flush=True); continue
-        psbl = inquire_psbl_order(code, price=price, ord_dvsn="00", include_cma="Y", include_ovrs="N")
+            print(f"  ❌ 계산된 수량=0 (invest={invest_amt:,.0f}, cur={cur}): {code}", flush=True); continue
+
+        # 주문가능 조회: 최우선지정가 모드(04, ORD_UNPR=0)
+        psbl = inquire_psbl_order(code, price=0, ord_dvsn="04", include_cma="Y", include_ovrs="N")
         msg = psbl.get("msg", "")
         if is_market_closed_msg(msg):
-            print("⛔ 시장 종료 메시지 감지(주문가능 응답) — 종료하지 않고 스킵/계속 진행", flush=True)
+            print("⛔ 시장 종료 메시지 감지(주문가능 응답) — 스킵하고 계속", flush=True)
         if any(k in msg for k in ban_keywords):
             not_tradable_today.add(code); save_not_tradable(today_str, not_tradable_today)
             print(f"  ⛔ 종목 거래제한 감지 → 오늘 스킵 등록: {code} / {msg}", flush=True); continue
+
         cash_qty = psbl.get("nrcvb_buy_qty", 0)
         if cash_qty <= 0:
             print(f"  💸 현금 기준 주문가능수량=0 → 스킵: {code}", flush=True); continue
+
         qty = min(strategy_qty, cash_qty)
         if qty < strategy_qty:
             print(f"  ↪ 잔액 제한으로 수량 {strategy_qty}→{qty} 축소 ({code})", flush=True)
-        result = send_order_throttled(code, price, qty, order_type="매수", ord_dvsn="00")
+
+        # 최우선지정가(04): 가격은 의미 없으므로 0 전달
+        result = send_order_throttled(code, 0, qty, order_type="매수", ord_dvsn="04")
         msg2 = (result.get("msg1") or "").strip()
-        need_approx = price * qty
-        print(f"  🟩 [장전] 매수 00 요청: {code} x{qty} @ {price} (src={price_src}, 필요자금≈{need_approx:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
-        log_trade(datetime.now(), code, price, qty, "매수", result)
+        print(f"  🟩 [09:00] 매수 04 요청: {code} x{qty} (참고필요자금≈{cur*qty:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
+        log_trade(datetime.now(), code, cur, qty, "매수", result)
+
         if is_market_closed_msg(msg2):
-            print("⛔ 시장 종료 메시지 감지(매수 응답) — 종료하지 않고 계속 진행", flush=True)
+            print("⛔ 시장 종료 메시지 감지(매수 응답) — 계속 진행", flush=True)
+
         if str(result.get("rt_cd")) == "0":
             bought_today.add(code); save_bought_today(today_str, bought_today)
-            refresh_avg_after_buy(code, tries=2, delay=1.0)
         else:
             if any(k in msg2 for k in ban_keywords):
                 not_tradable_today.add(code); save_not_tradable(today_str, not_tradable_today)
@@ -1058,21 +919,112 @@ def save_not_tradable(today_str, codes_set):
             json.dump({"date": today_str, "codes": sorted(list(codes_set))}, f, ensure_ascii=False, indent=2)
     except: pass
 
-# ───────────── 하루 일정표 구성 및 실행 ─────────────
+# ───────────── 이벤트 핸들러/스케줄 ─────────────
+def do_open_moo_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map):
+    print("▶ [정시] 09:00 매수 시작", flush=True)
+    open_moo_buy_once(today_candidates, bought_today, not_tradable_today, prev_tv_map)
+
+def do_snapshot(tag=""):
+    now = datetime.now()
+    holdings = get_all_holdings()
+    try:
+        summary = get_account_summary()
+    except Exception:
+        summary = None
+    print(f"📸 스냅샷({tag})", flush=True)
+    save_portfolio_snapshot(now, holdings, summary=summary)
+    save_holdings_snapshot(now, holdings)
+
+def do_cancel_buys():
+    print("🕝 [정시] 14:55 매수 미체결 전량 취소", flush=True)
+    try:
+        cancelables = list_cancelable_buy_orders()
+        to_cancel = [it for it in cancelables if it.get("is_buy") and int(it.get("rmn_qty", 0)) > 0]
+        if not to_cancel:
+            today_orders_raw = get_today_orders()
+            fb = []
+            for o in today_orders_raw or []:
+                side_txt = str(o.get("sll_buy_dvsn_cd") or o.get("sll_buy_dvsn_name") or o.get("trad_dvsn_name") or "")
+                is_buy = ("매수" in side_txt) or (str(side_txt) in ("02","2"))
+                rmn = int(_num0(o.get("rmn_qty") or o.get("unerc_qty")))
+                if not (is_buy and rmn > 0): continue
+                odno = str(o.get("odno") or o.get("ODNO") or "").strip()
+                orgno = (o.get("krx_fwdg_ord_orgno") or o.get("KRX_FWDG_ORD_ORGNO")
+                         or o.get("ord_gno_brno") or o.get("ORD_GNO_BRNO") or "")
+                ord_dvsn = str(o.get("ord_dvsn") or o.get("ORD_DVSN") or "00").strip() or "00"
+                pdno = str(o.get("pdno") or o.get("PDNO") or "").zfill(6)
+                if not (odno and orgno): continue
+                fb.append({"krx_fwdg_ord_orgno": str(orgno),"odno": str(odno),"ord_dvsn": ord_dvsn,
+                           "rmn_qty": int(rmn),"pdno": pdno,"is_buy": True})
+            to_cancel = fb
+        num = 0
+        total_canceled = 0
+        for it in to_cancel:
+            canceled, after_rmn, _ = cancel_and_report(it)
+            total_canceled += canceled
+            num += 1
+        print(f"✅ 전량 취소 요청 완료: 취소요청 {num}건 / 총 {total_canceled}주 취소", flush=True)
+    except Exception as e:
+        print(f"⚠️ 취소 처리 실패: {e}", flush=True)
+
+def do_force_sell_and_snapshot():
+    do_snapshot(tag="15:00")
+    now = datetime.now()
+    holdings = get_all_holdings()
+    try:
+        today_orders = get_today_orders()
+    except:
+        today_orders = []
+    for code, pos in holdings.items():
+        code = str(code).zfill(6)
+        qty = int(pos.get("qty", 0) or 0)
+        if qty <= 0:
+            continue
+        avg = pos.get("avg_price", None)
+        cur = pos.get("cur_price", None) or get_current_price(code)
+        pnl = calc_pnl_pct(avg, cur) if (avg and cur) else None
+        open_sell_qty = get_open_sell_qty_for_code(today_orders, code)
+        sellable_qty = max(0, qty - open_sell_qty)
+        if sellable_qty <= 0:
+            continue
+        reason = f"pnl={pnl:.2f}%" if pnl is not None else "force_close"
+        print(f"⛳ 15:00 전량 매도[{reason}]: {code} sellable={sellable_qty}", flush=True)
+        result = send_order_throttled(code, 0, sellable_qty, order_type="매도", ord_dvsn="01")
+        log_trade(now, code, cur or 0, sellable_qty, "매도", result)
+    print("↩️ 15:00 강제 매도 주문 발행 완료 — 5분 간격 모니터링으로 전환", flush=True)
+    monitor_after_3pm_for_idle_exit()
+
+# ───────────── 마감(15:30) 전용: 평가자료만 저장 후 종료 ─────────────
+def save_pnl_only_and_exit(tag="market_close"):
+    now = datetime.now()
+    try:
+        summary = get_account_summary()
+    except Exception:
+        summary = {}
+    total_eval_amount = _num0((summary or {}).get("tot_evlu_amt"))
+    try:
+        append_daily_pnl(now, total_eval_amount)
+    except Exception as e:
+        print(f"⚠️ 평가자료 저장 오류: {e}", flush=True)
+
+    print(f"🛑 [{tag}] 마감 저장 완료 → 종료합니다.", flush=True)
+    sys.exit(0)
+
+def do_market_close_and_exit():
+    # 마감 시에는 평가자료.csv만 저장하고 종료
+    save_pnl_only_and_exit(tag="market_close")
+
 def build_today_events(today_candidates, bought_today, not_tradable_today, prev_tv_map):
     today = datetime.now().date()
     today_events = [
-        ("preopen_buy",    datetime.combine(today, PREOPEN_BID_TIME),   lambda: do_preopen_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map)),
-        ("snap_0900",      datetime.combine(today, SNAP_0900_TIME),     lambda: do_snapshot(tag="09:00")),
-        ("cancel_buys",    datetime.combine(today, CANCEL_BUY_TIME),    do_cancel_buys),
-        ("snap_1500_sell", datetime.combine(today, SNAP_1500_TIME),     do_force_sell_and_snapshot),
-        ("close_and_exit", datetime.combine(today, MARKET_CLOSE_TIME),  do_market_close_and_exit),
+        ("open_moo_buy",  datetime.combine(today, OPEN_BUY_TIME),     lambda: do_open_moo_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map)),
+        ("snap_0900",     datetime.combine(today, SNAP_0900_TIME),    lambda: do_snapshot(tag="09:00")),
+        ("cancel_buys",   datetime.combine(today, CANCEL_BUY_TIME),   do_cancel_buys),
+        ("snap_1500_sell",datetime.combine(today, SNAP_1500_TIME),    do_force_sell_and_snapshot),
+        ("close_and_exit",datetime.combine(today, MARKET_CLOSE_TIME), do_market_close_and_exit),
     ]
-
-    # 현재 이후 이벤트만 유지 (재시작 시 안전)
     now = datetime.now()
     today_events = [ev for ev in today_events if ev[1] > now]
-    # 시각 기준 정렬
     today_events.sort(key=lambda x: x[1])
     return today_events
 
@@ -1127,10 +1079,9 @@ def main():
     bought_today = load_bought_today(today_str)
     not_tradable_today = load_not_tradable(today_str)
 
-    # 하루 일정 실행 (현재 이후 이벤트만 대기/실행)
+    # 하루 일정 실행
     run_today_schedule(today_candidates, bought_today, not_tradable_today, prev_tv_map)
 
-# 모듈로 import 시 자동 실행되지 않도록 보호
 if __name__ == "__main__":
     try:
         main()

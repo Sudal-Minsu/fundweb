@@ -105,7 +105,7 @@ def get_top_200_codes():
         try:
             hist = fdr.DataReader(code, start_date, today)
             first_date = hist.index.min().date()
-            if len(hist) >= 2800:
+            if len(hist) >= 3000:
                 recent = hist.tail(100)
                 low_vol = recent['Volume'].isna().sum() + (recent['Volume']<=1).sum()
                 if low_vol <= 50:

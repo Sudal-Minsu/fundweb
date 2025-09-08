@@ -18,7 +18,7 @@ import hashlib, struct
 from config_choi import DB_CONFIG
 
 # ------------------- 설정 -------------------
-TRAIN_YEARS = 12
+TRAIN_YEARS = 10
 BACKTEST_START_DATE = pd.to_datetime("2024-07-01")
 TEST_PERIOD_DAYS = 300
 SEQ_LEN = 5

@@ -18,7 +18,7 @@ import hashlib, struct
 from config_choi import DB_CONFIG
 
 # ------------------- 설정 -------------------
-TRAIN_YEARS = 12
+TRAIN_YEARS = 10
 BACKTEST_START_DATE = pd.Timestamp.today().normalize()
 SEQ_LEN = 5
 BATCH_SIZE = 32
