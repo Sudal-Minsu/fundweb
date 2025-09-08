@@ -1,5 +1,11 @@
-stock_data.py
-auto_pipeline.py
-rule_2_predict.py
+# 로컬 전용/민감 파일
+access_token.json
+config.py
+log.txt
 __pycache__
 logs
+
+# 로컬 결과 폴더
+results_3/
+rule_2_결과/
+
