@@ -1,16 +1,8 @@
 from stock_data import run_stock_data  
 import pymysql
+from config_choi import DB_CONFIG
 from rule_2_predict import run_rule_2_predict
 
-# ───────────── DB 설정 ─────────────
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "stockuser",
-    "password": "stockpass123!",
-    "port": 3306,
-    "database": "news_db",
-    "charset": "utf8mb4"
-}
 
 """ 데이터베이스 생성 """
 def create_database_if_not_exists():

@@ -10,6 +10,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sqlalchemy import create_engine
 from collections import Counter
 from pandas.tseries.offsets import BDay
+from config_ko import DB_CONFIG
 warnings.filterwarnings("ignore")
 
 # ===== 하이퍼파라미터 =====
@@ -32,15 +33,7 @@ random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
 device = torch.device("cpu")
 
 
-# MySQL 연결 설정
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "0000",
-    "database": "news_db",
-    "port": 3306,
-    "charset": "utf8mb4"
-}
+
 
 # ===== DB =====
 def get_engine():

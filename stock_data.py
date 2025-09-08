@@ -8,16 +8,7 @@ import time
 import FinanceDataReader as fdr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
-
-# ───────── DB 설정 ─────────
-DB_CONFIG = {
-    "host": "localhost",
-    "user": "stockuser",
-    "password": "stockpass123!",
-    "port": 3306,
-    "database": "news_db",
-    "charset": "utf8mb4",
-}
+from config_choi import DB_CONFIG  
 
 # 오늘 날짜 및 시작 날짜 설정
 today = datetime.date.today()
@@ -58,9 +49,10 @@ def fetch_market_page(market_type, page, field_ids):
     return df
 
 # 유니버스 추출 함수
+# ROE, PER, 시가총액, 영업이익증가율을 모두 활용하며 각각 가중치 적용
 def get_top_200_codes():
     all_markets = []
-    for market_type in [0, 1]:  # 0: KOSPI, 1: KOSDAQ
+    for market_type in [1]:  # 코스닥만 대상
         # 동적 필드 추출 및 페이지 수 확인
         field_ids = fetch_field_ids(market_type)
         # 전체 페이지 수
@@ -74,7 +66,7 @@ def get_top_200_codes():
 
         # 병렬 없이 진행 (필요시 ThreadPoolExecutor 적용)
         market_data = []
-        for page in tqdm(range(1, total_pages + 1), desc=f"{'코스피' if market_type==0 else '코스닥'} 크롤링"):
+        for page in tqdm(range(1, total_pages + 1), desc="코스닥 크롤링"):
             try:
                 df_page = fetch_market_page(market_type, page, field_ids)
                 market_data.append(df_page)
@@ -82,13 +74,13 @@ def get_top_200_codes():
             except Exception:
                 continue
         df_market = pd.concat(market_data, ignore_index=True)
-        df_market['시장'] = '코스피' if market_type==0 else '코스닥'
+        df_market['시장'] = '코스닥'
         all_markets.append(df_market)
 
     df = pd.concat(all_markets, ignore_index=True)
 
-    # 관심 필드: 영업이익증가율
-    cols = ['영업이익증가율']
+    # 관심 필드
+    cols = ['시가총액', '영업이익증가율']
     # 대체 결측값 처리
     df.replace({'-': None, ',': ''}, regex=True, inplace=True)
     df = df.dropna(subset=cols + ['종목코드'])
@@ -96,16 +88,14 @@ def get_top_200_codes():
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors='coerce')
     df = df.dropna(subset=cols)
-    # 양수만
-    df = df[(df['영업이익증가율']>0)]
 
     # 랭킹
-    df['op_inc_growth_rank'] = df['영업이익증가율'].rank(ascending=False)
+    df['시총_rank'] = df['시가총액'].rank(ascending=False)
 
-    # 가중합
-    df['weighted_score'] = df['op_inc_growth_rank']
+    # 가중합 (현재는 시총 랭크만 사용)
+    df['weighted_score'] = (df['시총_rank'])
 
-    # 상위 300개 후보
+    # 상위 500개 후보
     top_pool = df.sort_values('weighted_score').drop_duplicates('종목코드').head(500)
     top_codes = top_pool['종목코드'].tolist()
 
@@ -239,7 +229,7 @@ def run_stock_data():
     conn.commit()
     print(f"[삭제 완료] {cutoff_date} 이전 데이터")
 
-    # 상위 200개 종목 추출 
+    # 상위 200개 종목 추출
     top_200_codes = get_top_200_codes()
 
     # 추출한 종목코드들을 %s, %s, %s, ... 형태로 변환
@@ -268,7 +258,7 @@ def run_stock_data():
     print("전체 데이터 저장 완료")
 
     print("지수 저장 시작")
-    update_market_indices()  
+    update_market_indices()  # KOSPI/KOSDAQ 둘 다 저장
     
     print("거시지표 저장 시작")
     save_macro_data()
