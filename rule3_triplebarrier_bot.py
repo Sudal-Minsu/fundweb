@@ -445,72 +445,58 @@ def get_auth_info():
 # ========== 잔고/예수금/평가 & 스냅샷 ==========
 def check_account(access_token, app_key, app_secret):
     output1, output2 = [], []
-    CTX_AREA_NK100 = ""
+    CTX_AREA_NK100 = ''
     url_base = BASE_URL
+
     while True:
         url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
         headers = {
-            "content-type": "application/json; charset=utf-8",   # ← charset 추가
+            "content-type": "application/json; charset=utf-8",
             "authorization": f"Bearer {access_token}",
             "appkey": app_key, "appsecret": app_secret,
             "tr_id": "VTTC8434R",
-            "custtype": "P"                                     # ← 필요시 명시
+            "custtype": "P",
         }
         params = {
-            "CANO": ACCOUNT_INFO['CANO'],
-            "ACNT_PRDT_CD": ACCOUNT_INFO['ACNT_PRDT_CD'],
+            "CANO": str(ACCOUNT_INFO['CANO']).replace("-", "").zfill(8),
+            "ACNT_PRDT_CD": str(ACCOUNT_INFO['ACNT_PRDT_CD']).zfill(2),
             "AFHR_FLPR_YN": "N", "UNPR_DVSN": "01",
             "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N",
             "OFL_YN": "", "INQR_DVSN": "01", "PRCS_DVSN": "00",
-            "CTX_AREA_FK100": "", "CTX_AREA_NK100": CTX_AREA_NK100
+            "CTX_AREA_FK100": "", "CTX_AREA_NK100": CTX_AREA_NK100,
         }
+
         res = requests.get(url, headers=headers, params=params, timeout=10)
         print("📡 응답 상태코드:", res.status_code)
-
-        # JSON 파싱
         try:
             data = res.json()
         except Exception:
-            _log_api_fail("check_account:json_parse", res, res.text)
+            print("❌ JSON 파싱 실패:", res.text[:300])
             return None, None
 
-        # 성공 판정 & 실패시 본문 이유 남기기
         if (res.status_code != 200) or (data.get("rt_cd") != "0"):
-            _log_api_fail("check_account", res, data)
+            msg = data.get("msg1") or data.get("msg") or data.get("message") or ""
+            print(f"❌ API 실패: check_account http={res.status_code} rt_cd={data.get('rt_cd')} msg={msg}")
+            # (선택) 토큰 문제 의심 시 캐시 토큰 삭제
+            # if os.path.exists("access_token.json"): os.remove("access_token.json")
             return None, None
 
-        # 방어: output1가 없거나 빈 경우
-        if "output1" not in data or data.get("output1") in (None, [], [{}]):
-            # 그래도 output2만으로 예수금은 받을 수 있음
-            output2.append((data.get("output2") or [{}])[0])
-            break
-
-        # 정상 분기
-        try:
+        # holdings 페이지 누적
+        if "output1" in data and data["output1"] not in (None, [], [{}]):
             output1.append(pd.DataFrame.from_records(data["output1"]))
-        except Exception as e:
-            _log_api_fail("check_account:output1_parse", res, data)
-            return None, None
 
-        # 페이지 토큰(대소문자 모두 시도)
-        next_key = (data.get("ctx_area_nk100") or data.get("CTX_AREA_NK100") or "").strip()
-        CTX_AREA_NK100 = next_key
-
-        # 마지막 페이지면 output2(요약) 저장
+        # 다음 페이지 토큰(대/소문자 모두 시도)
+        CTX_AREA_NK100 = (data.get('ctx_area_nk100') or data.get('CTX_AREA_NK100') or '').strip()
         if not CTX_AREA_NK100:
-            output2.append((data.get("output2") or [{}])[0])
+            # 요약(예수금 등)
+            output2.append((data.get('output2') or [{}])[0])
             break
 
-    # holdings(DataFrame) 구성
+    # DataFrame 정리
     if output1 and not output1[0].empty:
-        df_all = pd.concat(output1, ignore_index=True)
-        cols = ['pdno','hldg_qty','pchs_avg_pric']
-        for c in cols:
-            if c not in df_all.columns:
-                df_all[c] = pd.NA
-        res1 = df_all[cols].rename(columns={
-            'pdno':'종목코드', 'hldg_qty':'보유수량', 'pchs_avg_pric':'매입단가'
-        }).reset_index(drop=True)
+        res1 = (pd.concat(output1, ignore_index=True)
+                  .reindex(columns=['pdno','hldg_qty','pchs_avg_pric']))
+        res1 = res1.rename(columns={'pdno':'종목코드','hldg_qty':'보유수량','pchs_avg_pric':'매입단가'}).reset_index(drop=True)
         res1['종목코드'] = res1['종목코드'].astype(str).str.zfill(6)
         res1['보유수량'] = pd.to_numeric(res1['보유수량'], errors='coerce').fillna(0).astype(int)
         res1['매입단가'] = pd.to_numeric(res1['매입단가'], errors='coerce').fillna(0.0).astype(float)
@@ -519,6 +505,7 @@ def check_account(access_token, app_key, app_secret):
 
     res2 = output2[0] if output2 else {}
     return res1, res2
+
 
 
 # 포트폴리오 CSV 내보내기
