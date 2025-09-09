@@ -20,7 +20,7 @@ from sklearn.metrics import (
 )
 
 # ✅ NEW: 결과 파일 경로
-RESULT_DIR = "results"
+RESULT_DIR = "results_3"
 METRICS_CSV = os.path.join(RESULT_DIR, "model_metrics.csv")         # 모델/백테스트 지표 누적
 PREDICTIONS_CSV = os.path.join(RESULT_DIR, "model_predictions.csv")  # 검증/테스트 예측 덤프 누적
 os.makedirs(RESULT_DIR, exist_ok=True)
