@@ -20,11 +20,11 @@ INVEST_RATE_FROM_PREV_TV = 0.0025
 CANCEL_BUY_TIME   = dtime(14, 55)
 MARKET_CLOSE_TIME = dtime(15, 30)
 
-# 09:00 매수 트리거 시간
-OPEN_BUY_TIME     = dtime(9, 0, 0)
+# 매수 트리거 시간
+OPEN_BUY_TIME     = dtime(8, 59, 0)
 
 # 스냅샷 시각
-SNAP_0900_TIME = dtime(9, 30, 0)
+SNAP_0930_TIME = dtime(9, 30, 0)
 SNAP_1500_TIME = dtime(15, 0, 0)
 
 # 15:00 이후 조기 종료 체크 주기(초)
@@ -824,13 +824,13 @@ def monitor_after_3pm_for_idle_exit():
         sleep_s = max(1, min(POST_SELL_CHECK_INTERVAL_SEC, remaining))
         time.sleep(sleep_s)
 
-# ───────────── 09:00 최우선지정가 매수 로직 ─────────────
+# ───────────── 매수 로직 ─────────────
 def open_moo_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_map):
     """
-    09:00에 1회 실행: 최우선지정가(04)로 매수
+    매수 1회 실행: 최우선지정가(04)로 매수
     - 수량 계산은 현재가로 근사(주문 자체는 ORD_UNPR=0)
     """
-    print(f"▶ [09:00] 매수 시작 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}%)", flush=True)
+    print(f"▶ 매수 시작 (전일 거래대금의 {INVEST_RATE_FROM_PREV_TV*100:.2f}%)", flush=True)
     today_str = datetime.now().strftime("%Y%m%d")
     ban_keywords = ["매매불가", "거래불가", "거래정지", "주문거절", "매매 금지", "거래 금지"]
 
@@ -875,7 +875,7 @@ def open_moo_buy_once(buy_codes, bought_today, not_tradable_today, prev_tv_map):
         # 최우선지정가(04): 가격은 의미 없으므로 0 전달
         result = send_order_throttled(code, 0, qty, order_type="매수", ord_dvsn="04")
         msg2 = (result.get("msg1") or "").strip()
-        print(f"  🟩 [09:00] 매수 04 요청: {code} x{qty} (참고필요자금≈{cur*qty:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
+        print(f"  🟩 매수 요청: {code} x{qty} (참고필요자금≈{cur*qty:,.0f}) → {result.get('rt_cd')} {msg2}", flush=True)
         log_trade(datetime.now(), code, cur, qty, "매수", result)
 
         if is_market_closed_msg(msg2):
@@ -921,7 +921,7 @@ def save_not_tradable(today_str, codes_set):
 
 # ───────────── 이벤트 핸들러/스케줄 ─────────────
 def do_open_moo_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map):
-    print("▶ [정시] 09:00 매수 시작", flush=True)
+    print("▶ 매수 시작", flush=True)
     open_moo_buy_once(today_candidates, bought_today, not_tradable_today, prev_tv_map)
 
 def do_snapshot(tag=""):
@@ -1018,7 +1018,7 @@ def build_today_events(today_candidates, bought_today, not_tradable_today, prev_
     today = datetime.now().date()
     today_events = [
         ("open_moo_buy",  datetime.combine(today, OPEN_BUY_TIME),     lambda: do_open_moo_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map)),
-        ("snap_0900",     datetime.combine(today, SNAP_0900_TIME),    lambda: do_snapshot(tag="09:00")),
+        ("snap_0900",     datetime.combine(today, SNAP_0930_TIME),    lambda: do_snapshot(tag="09:30")),
         ("cancel_buys",   datetime.combine(today, CANCEL_BUY_TIME),   do_cancel_buys),
         ("snap_1500_sell",datetime.combine(today, SNAP_1500_TIME),    do_force_sell_and_snapshot),
         ("close_and_exit",datetime.combine(today, MARKET_CLOSE_TIME), do_market_close_and_exit),
