@@ -14,6 +14,30 @@ from pandas.tseries.offsets import BDay
 from datetime import time as dtime
 from typing import Optional, Tuple, Dict
 from config_ko import get_api_keys, ACCOUNT_INFO
+import logging, os, json
+from logging.handlers import RotatingFileHandler
+
+LOG_DIR = "/home/ubuntu/fundweb/logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+_api_err_logger = logging.getLogger("api_errors")
+_api_err_logger.setLevel(logging.INFO)
+if not _api_err_logger.handlers:
+    h = RotatingFileHandler(os.path.join(LOG_DIR, "api_errors.log"),
+                            maxBytes=5_000_000, backupCount=5)
+    h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _api_err_logger.addHandler(h)
+
+def _log_api_fail(name, r, body):
+    try:
+        j = body if isinstance(body, dict) else json.loads(body)
+    except Exception:
+        j = {"_raw": str(body)[:400]}
+    rt_cd = (j.get("rt_cd") if isinstance(j, dict) else None)
+    code  = (j.get("code") or j.get("error_code") or j.get("status")) if isinstance(j, dict) else None
+    msg   = (j.get("msg1") or j.get("msg") or j.get("message") or j.get("error") or j.get("detail") or j.get("_raw") or "")
+    _api_err_logger.info(f"{name} http={getattr(r,'status_code','NA')} rt_cd={rt_cd} code={code} msg={str(msg)[:200]}")
+    print(f"❌ API 실패: {name} http={getattr(r,'status_code','NA')} rt_cd={rt_cd} code={code} msg={msg}")
 
 # ===== 주문/루프 슬립 설정 =====
 SLEEP_BETWEEN_BUYS  = 1.5   # 매수 주문 간 최소 대기(초)
@@ -421,15 +445,16 @@ def get_auth_info():
 # ========== 잔고/예수금/평가 & 스냅샷 ==========
 def check_account(access_token, app_key, app_secret):
     output1, output2 = [], []
-    CTX_AREA_NK100 = ''
+    CTX_AREA_NK100 = ""
     url_base = BASE_URL
     while True:
         url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
         headers = {
-            "content-type": "application/json",
+            "content-type": "application/json; charset=utf-8",   # ← charset 추가
             "authorization": f"Bearer {access_token}",
             "appkey": app_key, "appsecret": app_secret,
-            "tr_id": "VTTC8434R"
+            "tr_id": "VTTC8434R",
+            "custtype": "P"                                     # ← 필요시 명시
         }
         params = {
             "CANO": ACCOUNT_INFO['CANO'],
@@ -437,25 +462,53 @@ def check_account(access_token, app_key, app_secret):
             "AFHR_FLPR_YN": "N", "UNPR_DVSN": "01",
             "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N",
             "OFL_YN": "", "INQR_DVSN": "01", "PRCS_DVSN": "00",
-            "CTX_AREA_FK100": '', "CTX_AREA_NK100": CTX_AREA_NK100
+            "CTX_AREA_FK100": "", "CTX_AREA_NK100": CTX_AREA_NK100
         }
         res = requests.get(url, headers=headers, params=params, timeout=10)
         print("📡 응답 상태코드:", res.status_code)
+
+        # JSON 파싱
         try:
             data = res.json()
         except Exception:
-            print("❌ JSON 파싱 실패:", res.text[:300])
+            _log_api_fail("check_account:json_parse", res, res.text)
             return None, None
-        if data.get("rt_cd") != "0" or "output1" not in data:
-            print("❌ API 실패: 토큰/권한/요청 파라미터 확인 필요.")
+
+        # 성공 판정 & 실패시 본문 이유 남기기
+        if (res.status_code != 200) or (data.get("rt_cd") != "0"):
+            _log_api_fail("check_account", res, data)
             return None, None
-        output1.append(pd.DataFrame.from_records(data['output1']))
-        CTX_AREA_NK100 = data.get('ctx_area_nk100', '').strip()
-        if CTX_AREA_NK100 == '':
-            output2.append(data.get('output2', [{}])[0])
+
+        # 방어: output1가 없거나 빈 경우
+        if "output1" not in data or data.get("output1") in (None, [], [{}]):
+            # 그래도 output2만으로 예수금은 받을 수 있음
+            output2.append((data.get("output2") or [{}])[0])
             break
+
+        # 정상 분기
+        try:
+            output1.append(pd.DataFrame.from_records(data["output1"]))
+        except Exception as e:
+            _log_api_fail("check_account:output1_parse", res, data)
+            return None, None
+
+        # 페이지 토큰(대소문자 모두 시도)
+        next_key = (data.get("ctx_area_nk100") or data.get("CTX_AREA_NK100") or "").strip()
+        CTX_AREA_NK100 = next_key
+
+        # 마지막 페이지면 output2(요약) 저장
+        if not CTX_AREA_NK100:
+            output2.append((data.get("output2") or [{}])[0])
+            break
+
+    # holdings(DataFrame) 구성
     if output1 and not output1[0].empty:
-        res1 = pd.concat(output1)[['pdno','hldg_qty','pchs_avg_pric']].rename(columns={
+        df_all = pd.concat(output1, ignore_index=True)
+        cols = ['pdno','hldg_qty','pchs_avg_pric']
+        for c in cols:
+            if c not in df_all.columns:
+                df_all[c] = pd.NA
+        res1 = df_all[cols].rename(columns={
             'pdno':'종목코드', 'hldg_qty':'보유수량', 'pchs_avg_pric':'매입단가'
         }).reset_index(drop=True)
         res1['종목코드'] = res1['종목코드'].astype(str).str.zfill(6)
@@ -463,8 +516,10 @@ def check_account(access_token, app_key, app_secret):
         res1['매입단가'] = pd.to_numeric(res1['매입단가'], errors='coerce').fillna(0.0).astype(float)
     else:
         res1 = pd.DataFrame(columns=['종목코드','보유수량','매입단가'])
+
     res2 = output2[0] if output2 else {}
     return res1, res2
+
 
 # 포트폴리오 CSV 내보내기
 def export_portfolio_csvs(access_token, app_key, app_secret):
