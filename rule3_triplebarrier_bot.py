@@ -444,68 +444,93 @@ def get_auth_info():
 
 # ========== 잔고/예수금/평가 & 스냅샷 ==========
 def check_account(access_token, app_key, app_secret):
-    output1, output2 = [], []
+    import os
+    import pandas as pd
+    import requests
+
+    output1 = []
+    output2 = []
     CTX_AREA_NK100 = ''
-    url_base = BASE_URL
+    url_base = "https://openapivts.koreainvestment.com:29443"  # VTS(모의) 서버
 
     while True:
-        url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+        path = "/uapi/domestic-stock/v1/trading/inquire-balance"
+        url = f"{url_base}/{path}"
+
         headers = {
-            "content-type": "application/json; charset=utf-8",
+            "Content-Type": "application/json",
             "authorization": f"Bearer {access_token}",
-            "appkey": app_key, "appsecret": app_secret,
-            "tr_id": "VTTC8434R",
-            "custtype": "P",
+            "appKey": app_key,
+            "appSecret": app_secret,
+            "tr_id": "VTTC8434R",   # VTS용 tr_id
+            "custtype": "P",        # 개인계좌(권장)
         }
+
+        # ▶ 계좌 파라미터 형식 보정 (하이픈 제거 + 자리수 고정)
+        cano = str(ACCOUNT_INFO['CANO']).replace('-', '').zfill(8)
+        prdt = str(ACCOUNT_INFO['ACNT_PRDT_CD']).zfill(2)
         params = {
-            "CANO": str(ACCOUNT_INFO['CANO']).replace("-", "").zfill(8),
-            "ACNT_PRDT_CD": str(ACCOUNT_INFO['ACNT_PRDT_CD']).zfill(2),
-            "AFHR_FLPR_YN": "N", "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "OFL_YN": "", "INQR_DVSN": "01", "PRCS_DVSN": "00",
-            "CTX_AREA_FK100": "", "CTX_AREA_NK100": CTX_AREA_NK100,
+            "CANO": cano,
+            "ACNT_PRDT_CD": prdt,
+            "AFHR_FLPR_YN": "N",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "01",
+            "PRCS_DVSN": "00",
+            "CTX_AREA_FK100": '',
+            "CTX_AREA_NK100": CTX_AREA_NK100
         }
+
+        # 디버그(마스킹)
+        print(f"[ACCT] CANO={cano[:2]}******{cano[-2:]}, PRDT={prdt}")
 
         res = requests.get(url, headers=headers, params=params, timeout=10)
         print("📡 응답 상태코드:", res.status_code)
+
         try:
             data = res.json()
         except Exception:
             print("❌ JSON 파싱 실패:", res.text[:300])
             return None, None
 
-        if (res.status_code != 200) or (data.get("rt_cd") != "0"):
+        # ▶ 실패시 본문 메시지까지 출력
+        if data.get("rt_cd") != "0" or "output1" not in data:
             msg = data.get("msg1") or data.get("msg") or data.get("message") or ""
             print(f"❌ API 실패: check_account http={res.status_code} rt_cd={data.get('rt_cd')} msg={msg}")
-            # (선택) 토큰 문제 의심 시 캐시 토큰 삭제
-            # if os.path.exists("access_token.json"): os.remove("access_token.json")
+            # (선택) 토큰 이슈 가능성 대비: 캐시 토큰 삭제
+            if os.path.exists("access_token.json"):
+                os.remove("access_token.json")
+                print("🗑️ 캐시된 토큰 삭제 완료")
             return None, None
 
-        # holdings 페이지 누적
-        if "output1" in data and data["output1"] not in (None, [], [{}]):
-            output1.append(pd.DataFrame.from_records(data["output1"]))
+        # 보유종목 페이지 누적
+        output1.append(pd.DataFrame.from_records(data['output1']))
 
-        # 다음 페이지 토큰(대/소문자 모두 시도)
+        # 다음 페이지 토큰(소문자/대문자 모두 대비)
         CTX_AREA_NK100 = (data.get('ctx_area_nk100') or data.get('CTX_AREA_NK100') or '').strip()
-        if not CTX_AREA_NK100:
-            # 요약(예수금 등)
-            output2.append((data.get('output2') or [{}])[0])
+
+        if CTX_AREA_NK100 == '':
+            output2.append(data.get('output2', [{}])[0])
             break
 
-    # DataFrame 정리
+    # 결과 정리
     if output1 and not output1[0].empty:
-        res1 = (pd.concat(output1, ignore_index=True)
-                  .reindex(columns=['pdno','hldg_qty','pchs_avg_pric']))
-        res1 = res1.rename(columns={'pdno':'종목코드','hldg_qty':'보유수량','pchs_avg_pric':'매입단가'}).reset_index(drop=True)
+        res1 = (pd.concat(output1, ignore_index=True)[['pdno', 'hldg_qty', 'pchs_avg_pric']]
+                .rename(columns={'pdno': '종목코드', 'hldg_qty': '보유수량', 'pchs_avg_pric': '매입단가'})
+                .reset_index(drop=True))
         res1['종목코드'] = res1['종목코드'].astype(str).str.zfill(6)
         res1['보유수량'] = pd.to_numeric(res1['보유수량'], errors='coerce').fillna(0).astype(int)
         res1['매입단가'] = pd.to_numeric(res1['매입단가'], errors='coerce').fillna(0.0).astype(float)
     else:
-        res1 = pd.DataFrame(columns=['종목코드','보유수량','매입단가'])
+        res1 = pd.DataFrame(columns=['종목코드', '보유수량', '매입단가'])
 
     res2 = output2[0] if output2 else {}
-    return res1, res2
+    return [res1, res2]
 
+     
+    
 
 
 # 포트폴리오 CSV 내보내기
