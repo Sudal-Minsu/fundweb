@@ -1018,7 +1018,7 @@ def build_today_events(today_candidates, bought_today, not_tradable_today, prev_
     today = datetime.now().date()
     today_events = [
         ("open_moo_buy",  datetime.combine(today, OPEN_BUY_TIME),     lambda: do_open_moo_buy(today_candidates, bought_today, not_tradable_today, prev_tv_map)),
-        ("snap_0900",     datetime.combine(today, SNAP_0930_TIME),    lambda: do_snapshot(tag="09:30")),
+        ("snap_0930",     datetime.combine(today, SNAP_0930_TIME),    lambda: do_snapshot(tag="09:30")),
         ("cancel_buys",   datetime.combine(today, CANCEL_BUY_TIME),   do_cancel_buys),
         ("snap_1500_sell",datetime.combine(today, SNAP_1500_TIME),    do_force_sell_and_snapshot),
         ("close_and_exit",datetime.combine(today, MARKET_CLOSE_TIME), do_market_close_and_exit),
