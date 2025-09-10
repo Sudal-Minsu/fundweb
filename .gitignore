@@ -8,3 +8,9 @@ logs
 results_3/
 rule_2_결과/
 
+rule_2_결과/
+inserver/data/results/
+logs/
+__pycache__/
+*.pyc
+portfolio.json

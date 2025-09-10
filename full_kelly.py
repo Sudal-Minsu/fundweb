@@ -48,7 +48,11 @@ if OLD_LOG_FILE.exists() and not LOG_FILE.exists():
     except Exception as e:
         print(f"기존 로그 이동 실패: {e}")
 
-# 총 매수 예산(이번 루프 전체)
+# ✅ 전체 자산을 f값 비율로 전부 사용 여부
+USE_FULL_EQUITY = True          # ← 요청 반영 (True면 총자산 전액 비례 배분)
+EQUITY_UTILIZATION = 1.0        # 1.0 = 100%, 필요시 0.8 등으로 조절
+
+# (기본값) 총 매수 예산(이번 루프 전체) — USE_FULL_EQUITY=False일 때만 사용
 TOTAL_BUY_BUDGET_ALL = 100_000_000   # 1억
 # 종목당 최대 매수 예산 상한
 MAX_BUY_BUDGET = 10_000_000
@@ -217,6 +221,107 @@ def send_order(stock_code: str, price: int, qty: int, order_type: str = "매수"
     except Exception:
         return {"rt_cd": "-1", "msg1": "INVALID_JSON"}
 
+# ───────────── 계좌 총자산(예수금+보유평가) 조회 ─────────────
+def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int, int]:
+    """
+    반환: (total_equity, cash, stock_eval)
+    - 우선 API output2에서 tot_evlu_amt(총평가금액), dnca_tot_amt(예수금) 시도
+    - 실패 시 보유목록(output1)×현재가로 평가, 예수금은 0으로 폴백
+    """
+    url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": f"Bearer {access_token}",
+        "appKey": app_key,
+        "appSecret": app_secret,
+        "tr_id": "VTTC8434R",
+    }
+    params = {
+        "CANO": ACCOUNT_INFO["CANO"],
+        "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
+        "AFHR_FLPR_YN": "N",
+        "OFL_YN": "",
+        "INQR_DVSN": "02",
+        "UNPR_DVSN": "01",
+        "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N",
+        "PRCS_DVSN": "01",
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": "",
+    }
+    cash = 0
+    stock_eval = 0
+    total_equity = 0
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        time.sleep(1.2)
+        j = res.json()
+        # 1) 먼저 output2에서 바로 끌어오기
+        out2 = (j.get("output2") or [{}])[0]
+        if isinstance(out2, dict):
+            # 필드명은 계정/환경에 따라 약간 다를 수 있음 → 다양한 키 시도
+            for k in ["dnca_tot_amt", "dnca_avlb_amt", "nxdy_excc_amt", "prvs_rcdl_excc_amt"]:
+                if k in out2 and str(out2[k]).strip():
+                    cash = int(float(out2[k]))
+                    break
+            for k in ["tot_evlu_amt", "scts_evlu_amt", "evlu_amt_smtl"]:
+                if k in out2 and str(out2[k]).strip():
+                    stock_eval = int(float(out2[k]))
+                    break
+        # 2) 보유목록으로 재평가 (output1이 더 신뢰되는 경우가 많음)
+        out1 = j.get("output1", [])
+        tmp_eval = 0
+        if isinstance(out1, list) and len(out1) > 0:
+            for it in out1:
+                try:
+                    qty = int(it.get("hldg_qty", 0))
+                    prpr = int(it.get("prpr", 0))  # 현재가(서버가 주는)
+                    if prpr <= 0:
+                        # 안전: 직접 시세조회
+                        cd = it.get("pdno")
+                        last = get_current_price(cd) if cd else 0
+                        prpr = last or 0
+                    tmp_eval += qty * prpr
+                except Exception:
+                    pass
+        # tmp_eval이 의미 있으면 우선 사용
+        if tmp_eval > 0:
+            stock_eval = tmp_eval
+        # total_equity 산정
+        if stock_eval and cash:
+            total_equity = stock_eval + cash
+        elif stock_eval and not cash:
+            total_equity = stock_eval
+        elif not stock_eval and cash:
+            total_equity = cash
+        else:
+            # 완전 실패 시: 포트폴리오 스냅샷으로 추정
+            est = 0
+            if portfolio_snapshot:
+                for code, pos in portfolio_snapshot.items():
+                    try:
+                        qty = int(pos.get("qty", 0))
+                        last = get_current_price(code) or 0
+                        est += qty * last
+                    except Exception:
+                        pass
+            total_equity = est
+    except Exception:
+        # API 실패 전체 폴백
+        est = 0
+        if portfolio_snapshot:
+            for code, pos in portfolio_snapshot.items():
+                try:
+                    qty = int(pos.get("qty", 0))
+                    last = get_current_price(code) or 0
+                    est += qty * last
+                except Exception:
+                    pass
+        total_equity = est
+        cash = 0
+        stock_eval = est
+    return int(total_equity), int(cash), int(stock_eval)
+
 # ───────────── 포트폴리오 & 로깅 ─────────────
 def load_portfolio() -> dict:
     path = Path("portfolio.json")
@@ -371,6 +476,23 @@ if __name__ == "__main__":
                 check_takeprofit_stoploss(portfolio)
                 save_portfolio(portfolio)
 
+            # 🔸 총자산 계산(예수금+보유평가) → f비율 배분에 사용
+            if USE_FULL_EQUITY:
+                total_equity, cash, stock_eval = get_account_totals(portfolio)
+                effective_total_budget = int(total_equity * EQUITY_UTILIZATION)
+                if effective_total_budget <= 0:
+                    print("⚠️ 총자산이 0으로 인식되어 배분 불가. 다음 루프로 이동.", flush=True)
+                    loop_count += 1
+                    time.sleep(600)
+                    continue
+                # 종목당 상한은 사실상 제거
+                effective_max_per_stock = float("inf")
+                print(f"💰 총자산(예수금+보유평가) = {total_equity:,} / 활용비율={EQUITY_UTILIZATION*100:.0f}% → "
+                      f"배분예산={effective_total_budget:,}", flush=True)
+            else:
+                effective_total_budget = int(TOTAL_BUY_BUDGET_ALL)
+                effective_max_per_stock = MAX_BUY_BUDGET
+
             # 1) 각 후보 p, 현재가, f* 계산
             kelly_list = []
             for d in rows:
@@ -382,7 +504,6 @@ if __name__ == "__main__":
                 p = extract_prob_from_row(d)
                 fstar = compute_kelly_fraction(p, R)
                 if fstar <= 0:
-                    # 엣지 없음
                     continue
                 kelly_list.append({
                     'code': code,
@@ -402,10 +523,11 @@ if __name__ == "__main__":
             sum_f = sum(x['fstar'] for x in kelly_list)
             allocated_total = 0
             for x in sorted(kelly_list, key=lambda z: z['fstar'], reverse=True):
-                target_value = TOTAL_BUY_BUDGET_ALL * (x['fstar'] / sum_f)
-                target_value = min(target_value, MAX_BUY_BUDGET)
+                target_value = effective_total_budget * (x['fstar'] / sum_f)
+                # 종목당 상한 적용
+                target_value = min(target_value, effective_max_per_stock) if np.isfinite(effective_max_per_stock) else target_value
                 if ENFORCE_TOTAL_BUDGET_CAP:
-                    remain = TOTAL_BUY_BUDGET_ALL - allocated_total
+                    remain = effective_total_budget - allocated_total
                     if remain <= 0:
                         target_value = 0
                     else:
@@ -477,13 +599,12 @@ if __name__ == "__main__":
                         total_value += shares * last_price
 
             now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            # equity_curve: 루프 순서대로 축적
             if 'equity_curve' not in locals():
                 equity_curve = []
             equity_curve.append({"time": now_str, "total_value": int(total_value)})
             pd.DataFrame(equity_curve).to_csv(Path(OUTPUT_DIR) / "equity_curve.csv", index=False, encoding='utf-8-sig')
 
-            print(f"[Loop {loop_count}] 평가금액: {total_value:,.0f}", flush=True)
+            print(f"[Loop {loop_count}] 평가금액(보유평가): {total_value:,.0f}", flush=True)
 
             loop_count += 1
             time.sleep(600)  # 10분 간격
