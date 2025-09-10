@@ -2,7 +2,7 @@ import json
 import keyring
 
 # MySQL 연결 설정
-DB_CONFIG = {"host": "localhost", 
+DB_CONFIG = {"host": "127.0.0.1", 
              "user": "stockuser", 
              "password": "stockpass123!", 
              "port": 3306, 

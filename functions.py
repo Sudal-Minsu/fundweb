@@ -5,7 +5,7 @@ import random
 import time
 from datetime import datetime
 import matplotlib.pyplot as plt
-from config import DB_CONFIG, ACCOUNT_INFO
+from config_ko import DB_CONFIG, ACCOUNT_INFO
 import keyring
 import os
 import pandas as pd
@@ -356,6 +356,32 @@ def read_trades_mysql(table_name):
     return df
 
 
+def log_account(account: dict):
+    import os, csv, datetime
+
+    BASE_DIR = "results_3"
+    CSV_PATH = os.path.join(BASE_DIR, "account_log.csv")
+    os.makedirs(BASE_DIR, exist_ok=True)
+
+    START_CAPITAL = 100_000_000  # 초기 투자금
+    today = datetime.date.today().isoformat()
+    tot_evlu_amt = int(account['tot_evlu_amt'])              # 총평가금액
+    tot_ret = (tot_evlu_amt - START_CAPITAL) / 1_000_000     # 총수익률 (백만 단위 증감)
+    pchs_amt = int(account['pchs_amt_smtl_amt'])             # 매수금액
+    cur_evlu_amt = int(account['evlu_amt_smtl_amt'])         # 현재 평가금액
+    pnl = int(account['evlu_pfls_smtl_amt'])                 # 평가 손익
+    cash = int(account['tot_evlu_amt']) - int(account['scts_evlu_amt'])  # 예수금
+
+    row = [today, tot_evlu_amt, tot_ret, pchs_amt, cur_evlu_amt, pnl, cash]
+
+    file_exists = os.path.exists(CSV_PATH)
+    with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["날짜","총평가금액","총수익률","매수금액","현재평가금액","평가손익","예수금"])
+        writer.writerow(row)
+
+    print(f"계좌 정보 저장 완료: {row}")
 
 
 
