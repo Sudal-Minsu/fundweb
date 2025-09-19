@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Full Kelly</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+      overflow-x: auto;
+      width: 100%;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+      white-space: nowrap;
+    }
+    .nav-left { display: flex; align-items: center; }
+    .nav-left img { height: 32px; margin-right: 10px; }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+      white-space: nowrap;
+    }
+    .nav-links { display: flex; flex-wrap: nowrap; gap: 8px; }
+    .nav-links a {
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    .summary-cards {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0 40px;
+    }
+    .card {
+      flex: 1;
+      margin: 0 10px;
+      padding: 20px;
+      background: #2f2f2f;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      border: 1px solid #555;
+    }
+    .card span {
+      display: block;
+      margin-top: 8px;
+      font-size: 24px;
+      color: #40e0d0;
+    }
+    .matrix-title {
+      font-size: 20px;
+      margin: 8px 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .accordion.active {
+      color: #40e0d0;
+    }
+    .panel {
+      display: none;
+      padding: 10px 0;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 16px;
+      text-align: center;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 10px;
+      white-space: nowrap;
+    }
+    th {
+      background-color: #555;
+      color: white;
+    }
+    .one-title {
+      font-size: 24px;
+      margin: 8px 0 18px;
+      letter-spacing: 1px;
+      text-align: center;
+    }
+    .chart-card {
+      border: 1px solid #888;
+      border-radius: 6px;
+      padding: 12px;
+      background: #2f2f2f;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Full Kelly</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/daily_trading">Daily Trading</a>
+      <a href="/fullkelly" class="active">Full Kelly</a>
+      <a href="/triplebarrier_bot">TripleBarrier Bot</a>
+      <a href="/ranking" class="active">Ranking</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="summary-cards">
+      <div class="card" id="card-equity">총 평가금액<br><span>0</span></div>
+      <div class="card" id="card-return">누적수익률<br><span>0%</span></div>
+      <div class="card" id="card-todaypnl">오늘 손익<br><span>0</span></div>
+    </div>
+
+    <h2 class="one-title">◈ Equity Curve</h2>
+    <div class="chart-card"><canvas id="equityChart"></canvas></div>
+
+    <div style="height:60px;"></div>
+    <h2 class="one-title">◈ 누적 수익률</h2>
+    <div class="chart-card"><canvas id="cumReturnChart"></canvas></div>
+
+    <div style="height:60px;"></div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 추천 종목</h2>
+    <div class="panel">
+      <table id="buyListTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 예측 결과</h2>
+    <div class="panel">
+      <table id="candidatesTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 매매 로그</h2>
+    <div class="panel">
+      <table id="tradesTable"><thead></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+<script>
+const noFormatCols = ["종목코드","주문종류","거래시간","타임스탬프"];
+const PATH = {
+  equity: "/data/results/equity_curve.csv",
+  trades: "/data/results/trade_log.csv",
+  buy_list: "/data/results/buy_list.csv",
+  candidates: "/data/results/latest_candidates_stats.csv"
+};
+
+document.addEventListener("DOMContentLoaded", function () {
+  loadSummaryCards();
+  loadEquityCurve();
+  calculateTodaysPnL();
+  loadCSVtoTable(PATH.buy_list, "buyListTable");
+  loadCSVtoTable(PATH.candidates, "candidatesTable");
+  loadCSVtoTable(PATH.trades, "tradesTable");
+});
+
+function toggleAccordion(element) {
+  let panel = element.nextElementSibling;
+  if (panel.style.display === "block") {
+    panel.style.display = "none";
+    element.classList.remove("active");
+  } else {
+    panel.style.display = "block";
+    element.classList.add("active");
+  }
+}
+
+function loadCSVtoTable(csvPath, tableId) {
+  Papa.parse(csvPath, {
+    download: true,
+    header: true,
+    complete: function (results) {
+      let table = document.getElementById(tableId);
+      let thead = table.querySelector("thead");
+      let tbody = table.querySelector("tbody");
+      thead.innerHTML = "";
+      tbody.innerHTML = "";
+      if (results.data.length === 0) return;
+
+      let headerRow = document.createElement("tr");
+      Object.keys(results.data[0]).forEach(col => {
+        if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과") return;
+        let th = document.createElement("th");
+        if (col === "타임스탬프") th.textContent = "시간";
+        else if (col === "기대수익") th.textContent = "기대 수익";
+        else if (col === "예상손실") th.textContent = "예상 손실";
+        else if (col === "권장수량") th.textContent = "권장 수량";
+        else if (col === "상승확률(%)") th.textContent = "상승 확률(%)";
+        else if (col === "거래시간") th.textContent = "거래 시간";
+        else if (col === "상승확률(p)") th.textContent = "상승 확률(%)";
+        else if (col === "주문수량") th.textContent = "주문 수량";
+        else if (col === "주문종류") th.textContent = "주문 종류";
+        else if (col === "손익비(R)") th.textContent = "손익비";
+        else th.textContent = col;
+        if (col === "타임스탬프") headerRow.prepend(th);
+        else headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+
+      results.data.forEach(row => {
+        if (!row || Object.values(row).every(v => v === "")) return;
+        if ("주문결과" in row && row["주문결과"] !== "정상처리") return;
+
+        let tr = document.createElement("tr");
+        let orderedCols = Object.keys(row);
+        if (orderedCols.includes("타임스탬프")) {
+          orderedCols = ["타임스탬프", ...orderedCols.filter(c => c !== "타임스탬프")];
+        }
+
+        orderedCols.forEach(col => {
+          if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과") return;
+          let td = document.createElement("td");
+          let val = row[col] || "";
+
+          if ((col === "거래시간" || col === "타임스탬프") && val.length >= 16) {
+            val = val.substring(5, 16).replace('T',' ');
+          } else if (!noFormatCols.includes(col) && !isNaN(val) && val !== "") {
+            val = new Intl.NumberFormat("ko-KR").format(parseFloat(val));
+          }
+
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+  });
+}
+
+function loadSummaryCards() {
+  Papa.parse(PATH.equity, {
+    download: true,
+    header: true,
+    complete: function (results) {
+      if (results.data.length === 0) return;
+      let lastRow = results.data[results.data.length - 1];
+      let equity = lastRow["total_value"] || "0";
+      let cumReturn = lastRow["cum_return"] || "0";
+      const cardEquity = document.getElementById("card-equity");
+      const cardReturn = document.getElementById("card-return");
+
+      if (cardEquity) {
+        cardEquity.querySelector("span").textContent = new Intl.NumberFormat("ko-KR").format(parseFloat(equity));
+      }
+      if (cardReturn) {
+        cardReturn.querySelector("span").textContent = (parseFloat(cumReturn) * 100).toFixed(2) + "%";
+      }
+    }
+  });
+}
+
+function loadEquityCurve() {
+  Papa.parse(PATH.equity, {
+    download: true,
+    header: true,
+    complete: function (results) {
+      let labels = [];
+      let equity = [];
+      let cumReturn = [];
+      results.data.forEach(row => {
+        if (!row.time) return;
+        labels.push(row.time.substring(5));
+        equity.push(parseFloat(row.total_value));
+        cumReturn.push(parseFloat(row.cum_return) * 100);
+      });
+
+      const ctx1 = document.getElementById("equityChart").getContext("2d");
+      if (window.equityChart && typeof window.equityChart.destroy === "function") window.equityChart.destroy();
+      window.equityChart = new Chart(ctx1, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [{
+            label: "총 평가금액",
+            data: equity,
+            borderWidth: 2,
+            borderColor: "#40e0d0",
+            backgroundColor: "rgba(64,224,208,0.1)",
+            pointRadius: 2,
+            tension: 0
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+
+      const ctx2 = document.getElementById("cumReturnChart").getContext("2d");
+      if (window.cumReturnChart && typeof window.cumReturnChart.destroy === "function") window.cumReturnChart.destroy();
+      window.cumReturnChart = new Chart(ctx2, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [{
+            label: "누적수익률 (%)",
+            data: cumReturn,
+            borderWidth: 2,
+            borderColor: "#ff9800",
+            backgroundColor: "rgba(255,193,7,0.15)",
+            pointRadius: 2,
+            tension: 0
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+    }
+  });
+}
+
+function calculateTodaysPnL() {
+  const today = new Date();
+  const formattedToday = today.toISOString().substring(0,10);
+
+  let positions = {};
+  let todayPnL = 0;
+
+  Papa.parse(PATH.trades, {
+    download: true,
+    header: true,
+    complete: function (results) {
+      results.data.forEach(row => {
+        if (!row || Object.values(row).every(v => v === "")) return;
+        if (row["주문결과"] && row["주문결과"] !== "정상처리") return;
+
+        const t = row["거래시간"] || row["타임스탬프"] || "";
+        if (!t) return;
+        const tradeDate = new Date(t.replace(" ", "T"));
+        if (isNaN(tradeDate)) return;
+
+        const tradeDay = tradeDate.toISOString().substring(0,10);
+        if (tradeDay !== formattedToday) return;
+
+        const code  = row["종목코드"];
+        const qty   = parseFloat(row["주문수량"] || "0");
+        const price = parseFloat(row["현재가"] || row["체결가"] || row["단가"] || "0");
+        const side  = (row["주문종류"] || "").trim();
+
+        if (!code || !qty || !price) return;
+
+        positions[code] = positions[code] || { qty: 0, avg: 0 };
+
+        if (side.includes("매수") || side.toLowerCase() === "buy") {
+          const p = positions[code];
+          const newQty = p.qty + qty;
+          p.avg = newQty ? ((p.avg * p.qty) + (price * qty)) / newQty : p.avg;
+          p.qty = newQty;
+        } else if (side.includes("매도") || side.toLowerCase() === "sell") {
+          const p = positions[code];
+          const sellQty = Math.min(qty, p.qty || qty);
+          todayPnL += (price - (p.avg || price)) * sellQty;
+          p.qty = Math.max(0, (p.qty || 0) - sellQty);
+        }
+      });
+
+      const cardTodayPnL = document.getElementById("card-todaypnl");
+      if (cardTodayPnL) {
+        cardTodayPnL.querySelector("span").textContent =
+          new Intl.NumberFormat("ko-KR").format(todayPnL);
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>

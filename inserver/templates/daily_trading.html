@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Daily Trading</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.1"></script>
+  <style>
+    html, body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+      overflow-x: auto;
+      width: 100%;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+      white-space: nowrap;
+    }
+    .nav-left { display: flex; align-items: center; }
+    .nav-left img { height: 32px; margin-right: 10px; }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+      white-space: nowrap;
+    }
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .nav-links a {
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover, .nav-links a.active { background-color: #c0c0c0; }
+    .home-button { background-color: #52545a !important; color: white !important; }
+    .home-button:hover { background-color: white !important; color: #52545a !important; }
+    .main { padding: 40px 60px; min-height: 600px; }
+
+    .summary-cards {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0 40px;
+    }
+    .card {
+      flex: 1;
+      margin: 0 10px;
+      padding: 20px;
+      background: #2f2f2f;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      border: 1px solid #555;
+    }
+    .card span {
+      display: block;
+      margin-top: 8px;
+      font-size: 24px;
+      color: #40e0d0;
+    }
+
+    .one-title { 
+      font-size: 24px;
+      margin: 8px 0 18px;
+      letter-spacing: 1px;
+      text-align: center;
+    }
+    .matrix-title {
+      font-size: 20px;
+      margin: 12px 0;
+      cursor: pointer;
+    }
+    .panel {
+      display: none;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 20px auto;
+      font-size: 15px;
+      text-align: center;
+      width: 100%;
+      max-width: 1200px;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 10px;
+      white-space: nowrap;
+    }
+    th {
+      background-color: #555;
+      color: white;
+    }
+    .chart-card {
+      border: 1px solid #888;
+      border-radius: 6px;
+      padding: 12px;
+      background: #2f2f2f;
+      margin-bottom: 30px;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Daily Trading</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/daily_trading" class="active">Daily Trading</a>
+      <a href="/fullkelly">Full Kelly</a>
+      <a href="/triplebarrier_bot">TripleBarrier Bot</a>
+      <a href="/ranking">Ranking</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="summary-cards">
+      <div class="card" id="card-equity">총 평가금액<br><span>0</span></div>
+      <div class="card" id="card-return">누적수익률<br><span>0%</span></div>
+      <div class="card" id="card-todaypnl">오늘 손익<br><span>0</span></div>
+    </div>
+
+    <h2 class="one-title">◈ 총 평가금액</h2>
+    <div class="chart-card"><canvas id="equityChart"></canvas></div>
+    <div style="height:60px;"></div>
+
+    <h2 class="one-title">◈ 누적수익률</h2>
+    <div class="chart-card"><canvas id="cumReturnChart"></canvas></div>
+    <div style="height:60px;"></div>
+
+    <h3 class="matrix-title" onclick="toggleAccordion(this)">▸ 매수 후보</h3>
+    <div class="panel">
+      <table id="buyListTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <h3 class="matrix-title" onclick="toggleAccordion(this)">▸ 혼동 행렬</h3>
+    <div class="panel">
+      <div class="chart-card"><canvas id="confusionMatrixChart"></canvas></div>
+    </div>
+
+    <h3 class="matrix-title" onclick="toggleAccordion(this)">▸ 매매 로그</h3>
+    <div class="panel">
+      <table id="tradeLogTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <h3 class="matrix-title" onclick="toggleAccordion(this)">▸ 포트폴리오</h3>
+    <div class="panel">
+      <table id="portfolioTable"><thead></thead><tbody></tbody></table>
+    </div>
+
+    <h3 class="matrix-title" onclick="toggleAccordion(this)">▸ 보유 종목</h3>
+    <div class="panel">
+      <table id="holdingsTable"><thead></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <script>
+    function toggleAccordion(element) {
+      let panel = element.nextElementSibling
+      if (panel.style.display === "block") {
+        panel.style.display = "none"
+        element.classList.remove("active")
+      } else {
+        panel.style.display = "block"
+        element.classList.add("active")
+      }
+    }
+
+    function loadCSVtoTable(csvPath, tableId) {
+      Papa.parse(csvPath, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          console.log(csvPath, "로드 결과:", results.data)
+
+          let table = document.getElementById(tableId)
+          let thead = table.querySelector("thead")
+          let tbody = table.querySelector("tbody")
+          thead.innerHTML = ""
+          tbody.innerHTML = ""
+          if (results.data.length === 0) return
+
+          let cols = Object.keys(results.data[0])
+          let mergedCols = []
+
+          if (tableId === "tradeLogTable") {
+            mergedCols = cols.filter(c => c !== "주문결과")
+          } else if (cols.includes("date") && cols.includes("time")) {
+            mergedCols.push("일시")
+            mergedCols.push(...cols.filter(c => c !== "date" && c !== "time" && c !== "주문결과"))
+          } else {
+            mergedCols = cols.filter(c => c !== "주문결과")
+          }
+
+          const headerMap = {
+            "평가손익금액": "손익금",
+            "평가금액": "평가금",
+            "총평가금액": "총 평가금",
+            "매입금액": "매입금",
+            "거래시간": "거래 시간",
+            "주문수량": "주문 수량",
+            "주문종류": "주문 종류",
+            "일시": "시간",
+            "보유수량": "보유 수량",
+            "매입평균가격": "매입가"
+          }
+
+          let headerRow = document.createElement("tr")
+          mergedCols.forEach(col => {
+            let th = document.createElement("th")
+            if (headerMap[col]) {
+              th.textContent = headerMap[col]
+            } else {
+              th.textContent = col
+            }
+            headerRow.appendChild(th)
+          })
+          thead.appendChild(headerRow)
+
+          results.data.forEach(row => {
+            if (!row || Object.values(row).every(v => v === "")) return
+            if (
+              tableId === "tradeLogTable" &&
+              "주문결과" in row &&
+              row["주문결과"].trim() !== "주문성공"
+            ) return
+
+            let tr = document.createElement("tr")
+
+            mergedCols.forEach(col => {
+              let td = document.createElement("td")
+              let val = ""
+
+              if (col === "일시") {
+                let dt = (row["date"] || "").trim() + " " + (row["time"] || "").trim()
+                if (dt.trim()) {
+                  let d = new Date(dt)
+                  if (!isNaN(d)) {
+                    let mm = String(d.getMonth() + 1).padStart(2, "0")
+                    let dd = String(d.getDate()).padStart(2, "0")
+                    let hh = String(d.getHours()).padStart(2, "0")
+                    let min = String(d.getMinutes()).padStart(2, "0")
+                    val = `${mm}-${dd} ${hh}:${min}`
+                  } else {
+                    val = dt
+                  }
+                }
+              } else if (tableId === "tradeLogTable" && col === "거래시간") {
+                let dt = (row[col] || "").trim()
+                if (dt) {
+                  let d = new Date(dt)
+                  if (!isNaN(d)) {
+                    let mm = String(d.getMonth() + 1).padStart(2, "0")
+                    let dd = String(d.getDate()).padStart(2, "0")
+                    let hh = String(d.getHours()).padStart(2, "0")
+                    let min = String(d.getMinutes()).padStart(2, "0")
+                    val = `${mm}-${dd} ${hh}:${min}`
+                  } else {
+                    val = dt
+                  }
+                }
+              } else {
+                val = row[col]
+                if (val !== "" && !isNaN(val)) {
+                  if (col === "종목코드") {
+                    val = val
+                  } else {
+                    val = new Intl.NumberFormat("ko-KR").format(parseFloat(val))
+                  }
+                }
+              }
+
+              td.textContent = val
+              tr.appendChild(td)
+            })
+
+            tbody.appendChild(tr)
+          })
+        }
+      })
+    }
+
+    function loadEvalCharts(csvPath) {
+      Papa.parse(csvPath, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          console.log("평가자료 CSV:", results.data)
+
+          let rows = results.data.filter(r =>
+            (r["date"] || "").trim() &&
+            (r["총평가금액"] || "").trim() &&
+            (r["누적수익률(%)"] || "").trim()
+          )
+          if (rows.length === 0) {
+            console.error("평가자료.csv에서 유효한 데이터 없음")
+            return
+          }
+
+          let labels = rows.map(r => (r["date"] + " " + r["time"]).trim())
+          let equity = rows.map(r => parseFloat((r["총평가금액"] || "0").replace(/[, ]/g, "")))
+          let cumReturn = rows.map(r => parseFloat((r["누적수익률(%)"] || "0").replace(/[, ]/g, "")))
+
+          console.log("labels:", labels)
+          console.log("equity:", equity)
+          console.log("cumReturn:", cumReturn)
+
+          document.getElementById("card-equity").querySelector("span").textContent =
+            new Intl.NumberFormat("ko-KR").format(equity[equity.length - 1])
+          document.getElementById("card-return").querySelector("span").textContent =
+            cumReturn[cumReturn.length - 1].toFixed(2) + "%"
+          let todayPnL = equity[equity.length - 1] - equity[0]
+          document.getElementById("card-todaypnl").querySelector("span").textContent =
+            new Intl.NumberFormat("ko-KR").format(todayPnL)
+
+          const ctx1 = document.getElementById("equityChart").getContext("2d")
+          if (window.equityChart && typeof window.equityChart.destroy === "function") {
+            window.equityChart.destroy()
+          }
+          window.equityChart = new Chart(ctx1, {
+            type: "line",
+            data: {
+              labels: labels,
+              datasets: [{
+                label: "총 평가금액",
+                data: equity,
+                borderWidth: 2,
+                borderColor: "#40e0d0",
+                backgroundColor: "rgba(64,224,208,0.1)",
+                pointRadius: 2,
+                tension: 0
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false
+            }
+          })
+
+          const ctx2 = document.getElementById("cumReturnChart").getContext("2d")
+          if (window.cumReturnChart && typeof window.cumReturnChart.destroy === "function") {
+            window.cumReturnChart.destroy()
+          }
+          window.cumReturnChart = new Chart(ctx2, {
+            type: "line",
+            data: {
+              labels: labels,
+              datasets: [{
+                label: "누적수익률 (%)",
+                data: cumReturn,
+                borderWidth: 2,
+                borderColor: "#ff9800",
+                backgroundColor: "rgba(255,193,7,0.15)",
+                pointRadius: 2,
+                tension: 0
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false
+            }
+          })
+        }
+      })
+    }
+
+    function loadConfusionMatrix(csvPath, canvasId) {
+      Papa.parse(csvPath, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          console.log("혼동행렬 CSV:", results.data)
+
+          let rows = results.data.filter(r =>
+            (r["실제 라벨"] || "").trim() &&
+            (r["예측 라벨"] || "").trim() &&
+            (r["건수"] || "").trim()
+          )
+          if (rows.length === 0) return
+
+          const labels = ["상승", "하락"]
+
+          let matrixData = rows.map(r => ({
+            x: parseInt(r["예측 라벨"].trim()),
+            y: parseInt(r["실제 라벨"].trim()),
+            v: parseFloat(r["건수"] || 0),
+            pct: r["비율(%)"] || "0"
+          }))
+
+          const ctx = document.getElementById(canvasId).getContext("2d")
+          if (window.confusionMatrixChart && typeof window.confusionMatrixChart.destroy === "function") {
+            window.confusionMatrixChart.destroy()
+          }
+
+          window.confusionMatrixChart = new Chart(ctx, {
+            type: "matrix",
+            data: {
+              datasets: [{
+                label: "Confusion Matrix",
+                data: matrixData,
+                backgroundColor: ctx => {
+                  let v = ctx.dataset.data[ctx.dataIndex].v
+                  let maxV = Math.max(...matrixData.map(d => d.v))
+                  let alpha = maxV > 0 ? v / maxV : 0
+                  return `rgba(64,224,208,${alpha})`
+                },
+                width: ctx => {
+                  const area = ctx.chart.chartArea
+                  return area ? area.width / labels.length - 2 : 0
+                },
+                height: ctx => {
+                  const area = ctx.chart.chartArea
+                  return area ? area.height / labels.length - 2 : 0
+                }
+              }]
+            },
+            options: {
+              plugins: {
+                legend: { display: false },
+                title: { display: true, text: "혼동 행렬 (Heatmap)", color: "#e0e0e0" },
+                datalabels: {
+                  color: "#fff",
+                  font: { weight: "bold" },
+                  formatter: (value, ctx) => {
+                    let row = matrixData[ctx.dataIndex]
+                    return `${row.v}\n(${row.pct}%)`
+                  },
+                  align: "center",
+                  anchor: "center"
+                },
+                tooltip: {
+                  callbacks: {
+                    label: ctx => {
+                      let row = matrixData[ctx.dataIndex]
+                      let actual = labels[row.y]
+                      let predicted = labels[row.x]
+                      return `실제=${actual}, 예측=${predicted}: ${row.v}건 (${row.pct}%)`
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  type: "linear",
+                  min: -0.5,
+                  max: 1.5,
+                  ticks: {
+                    stepSize: 1,
+                    callback: v => labels[v],
+                    color: "#e0e0e0"
+                  },
+                  title: { display: true, text: "예측 라벨", color: "#e0e0e0" }
+                },
+                y: {
+                  type: "linear",
+                  min: -0.5,
+                  max: 1.5,
+                  reverse: true,
+                  ticks: {
+                    stepSize: 1,
+                    callback: v => labels[v],
+                    color: "#e0e0e0"
+                  },
+                  title: { display: true, text: "실제 라벨", color: "#e0e0e0" }
+                }
+              }
+            },
+            plugins: [ChartDataLabels]
+          })
+        }
+      })
+    }
+
+    loadCSVtoTable("/data/results/buy_list.csv", "buyListTable")
+    loadConfusionMatrix("/data/results/confusion_matrix.csv", "confusionMatrixChart")
+    loadCSVtoTable("/data/results/trade_log_2.csv", "tradeLogTable")
+    loadCSVtoTable("/data/results/포트폴리오.csv", "portfolioTable")
+    loadCSVtoTable("/data/results/보유종목.csv", "holdingsTable")
+    loadEvalCharts("/data/results/평가자료.csv")
+  </script>
+</body>
+</html>

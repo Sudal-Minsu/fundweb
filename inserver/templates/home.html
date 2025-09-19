@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>StockLENS</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+      overflow-x: auto;
+      width: 100%;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+      white-space: nowrap;
+    }
+
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+      white-space: nowrap;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .nav-links a {
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .home-main {
+      background-color: #0A1E3F;
+      height: 90vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    .home-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 64px;
+      color: white;
+      margin-bottom: 12px;
+      letter-spacing: 14px;
+    }
+    .home-sub {
+      font-size: 18px;
+      color: #d9d9d9;
+    }
+    footer {
+      background-color: #ffffff;
+      height: 80px;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/daily_trading">Daily Trading</a>
+      <a href="/fullkelly">Full Kelly</a>
+      <a href="/triplebarrier_bot">TripleBarrier Bot</a>
+      <a href="/ranking">Ranking</a>
+    </div>
+  </nav>
+
+  <div class="home-main">
+    <div class="home-title">StockLENS</div>
+    <div class="home-sub">주식 분석 · 매매</div>
+  </div>
+
+  <footer></footer>
+</body>
+</html>

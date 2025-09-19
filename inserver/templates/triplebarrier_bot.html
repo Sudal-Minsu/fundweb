@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>TripleBarrier Bot</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+      overflow-x: auto;
+      width: 100%;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+      white-space: nowrap;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+      white-space: nowrap;
+    }
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .nav-links a {
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover, .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    .summary-cards {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0 40px;
+    }
+    .card {
+      flex: 1;
+      margin: 0 10px;
+      padding: 20px;
+      background: #2f2f2f;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      border: 1px solid #555;
+    }
+    .card span {
+      display: block;
+      margin-top: 8px;
+      font-size: 24px;
+      color: #40e0d0;
+    }
+    .matrix-title {
+      font-size: 20px;
+      margin: 8px 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .accordion.active {
+      color: #40e0d0;
+    }
+    .panel {
+      display: none;
+      padding: 10px 0;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 16px;
+      text-align: center;
+      table-layout: auto;
+      width: 100%;
+      max-width: 1200px;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 10px;
+      white-space: nowrap;
+    }
+    th {
+      background-color: #555;
+      color: white;
+    }
+    .one-title { 
+      font-size: 24px;
+      margin: 8px 0 18px;
+      letter-spacing: 1px;
+      text-align: center;
+    }
+    .matrix-title { 
+      font-size: 20px;
+      margin: 8px 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #3a3a3a;
+      border: 1px solid #888;
+      table-layout: fixed;
+    }
+    .matrix-table thead th {
+      background: #555;
+      color: #e8e8e8;
+      font-weight: bold;
+      border: 1px solid #888;
+      padding: 14px 10px;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .matrix-table tbody td {
+      border: 1px solid #888;
+      padding: 14px 10px;
+      text-align: center;
+      background: #3a3a3a;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .matrix-table tbody tr:hover td { 
+      filter: brightness(1.2);
+    }
+    .section-spacer { 
+      height: 100px;
+    }
+    .chart-card { 
+      border: 1px solid #888; 
+      border-radius: 6px; 
+      padding: 12px; 
+      background: #2f2f2f; 
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| TripleBarrier Bot</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/daily_trading">Daily Trading</a>
+      <a href="/fullkelly">Full Kelly</a>
+      <a href="/triplebarrier_bot" class="active">TripleBarrier Bot</a>
+      <a href="/ranking">Ranking</a>
+    </div>
+  </nav>
+  <div class="main">
+    <div style="height:60px;"></div>
+    <div class="summary-cards">
+      <div class="card" id="card-equity">총 평가금액<br><span>0</span></div>
+      <div class="card" id="card-return">누적수익률<br><span>0%</span></div>
+      <div class="card" id="card-todaypnl">오늘 손익<br><span>0</span></div>
+    </div>
+    <h2 class="one-title">◈ 총 평가금액</h2>
+    <div class="chart-card"><canvas id="equityChart"></canvas></div>
+    <div style="height:60px;"></div>
+    <h2 class="one-title" style="text-align:center;">◈ 누적수익률</h2>
+    <div class="chart-card"><canvas id="cumReturnChart"></canvas></div>
+    <div style="height:60px;"></div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 포트폴리오</h2>
+    <div class="panel">
+      <table id="summaryTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 예측 결과</h2>
+    <div class="panel">
+      <table id="predsTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 추천 종목</h2>
+    <div class="panel">
+      <table id="recosTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 계좌 내역</h2>
+    <div class="panel">
+      <table id="accountTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 보유 종목</h2>
+    <div class="panel">
+      <table id="holdingsTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+    <h2 class="matrix-title" onclick="toggleAccordion(this)">▸ 매매 로그</h2>
+    <div class="panel">
+      <table id="tradesTable" class="matrix-table"><thead></thead><tbody></tbody></table>
+    </div>
+  </div>
+<script>
+  const headerMap = {
+    ts: "시간",
+    positions_value: "보유 금액",
+    total_cost: "매입 금액",
+    pnl: "평가손익",
+    cash: "예수금",
+    equity: "총평가금액",
+    asof_date: "기준일",
+    entry_date: "진입일",
+    code: "종목코드",
+    p: "상승확률",
+    score: "예측점수",
+    entry_px: "진입가",
+    side: "구분",
+    qty: "수량",
+    price: "가격",
+    reason: "거래 사유",
+    odno: "주문번호",
+    tp_px: "익절가",
+    sl_px: "손절가",
+    cash_after: "체결 후 잔고"
+  }
+  const noFormatCols = ["code", "종목코드", "odno"]
+
+  function toggleAccordion(element) {
+    let panel = element.nextElementSibling
+    if (panel.style.display === "block") {
+      panel.style.display = "none"
+      element.classList.remove("active")
+    } else {
+      panel.style.display = "block"
+      element.classList.add("active")
+    }
+  }
+
+  function loadCardData() {
+    Papa.parse("/data/results/equity_log.csv", {
+      download: true,
+      header: true,
+      complete: function(results) {
+        let rows = results.data.filter(r => r.ts && r.equity)
+        if (rows.length === 0) return
+        let lastRow = rows[rows.length - 1]
+
+        let equity = parseFloat((lastRow["equity"] || "0").replace(/[_ ,]/g,""))
+        let cumReturn = parseFloat((lastRow["cum_return"] || "0").replace(/[_ ,]/g,"")) * 100
+
+        document.getElementById("card-equity").querySelector("span").textContent =
+          new Intl.NumberFormat("ko-KR").format(equity)
+        document.getElementById("card-return").querySelector("span").textContent =
+          cumReturn.toFixed(2) + "%"
+      }
+    })
+
+    Papa.parse("/data/results/trades_log.csv", {
+      download: true,
+      header: true,
+      complete: function(results) {
+        let today = new Date().toISOString().slice(0, 10)
+        let todayPnL = 0
+        let positions = {}
+
+        results.data.forEach(row => {
+          if (!row || Object.values(row).every(v => v === "")) return
+          if (row.ts && row.ts.startsWith(today)) {
+            let side = row.side
+            let code = row.code
+            let qty = parseFloat((row.qty || "0").replace(/[_ ,]/g,""))
+            let price = parseFloat((row.price || "0").replace(/[_ ,]/g,""))
+
+            if (side === "BUY") {
+              positions[code] = { qty: qty, price: price }
+            } else if (side === "SELL" && positions[code]) {
+              let entry = positions[code]
+              let pnl = (price - entry.price) * qty
+              todayPnL += pnl
+              delete positions[code]
+            }
+          }
+        })
+
+        document.getElementById("card-todaypnl").querySelector("span").textContent =
+          new Intl.NumberFormat("ko-KR").format(todayPnL)
+      }
+    })
+  }
+
+  function loadCSVtoTable(csvPath, tableId, withPnL=false, limitRows=null) {
+    Papa.parse(csvPath, {
+      download: true,
+      header: true,
+      complete: function(results) {
+        let table = document.getElementById(tableId)
+        let thead = table.querySelector("thead")
+        let tbody = table.querySelector("tbody")
+        thead.innerHTML = ""
+        tbody.innerHTML = ""
+        if (results.data.length === 0) return
+        let headerRow = document.createElement("tr")
+        Object.keys(results.data[0]).forEach(col => {
+          let th = document.createElement("th")
+          th.textContent = headerMap[col] || col
+          headerRow.appendChild(th)
+        })
+        if (withPnL) {
+          let th = document.createElement("th")
+          th.textContent = "손익"
+          headerRow.appendChild(th)
+        }
+        thead.appendChild(headerRow)
+        let rows = limitRows ? results.data.slice(0, limitRows) : results.data
+        rows.forEach(row => {
+          if (!row || Object.values(row).every(v => v === "")) return
+          let tr = document.createElement("tr")
+          Object.keys(row).forEach(col => {
+            let td = document.createElement("td")
+            let val = (row[col] || "").replace(/_/g, "")
+            if (col === "side") {
+              if (val === "BUY") val = "매수"
+              else if (val === "SELL") val = "매도"
+              else if (val === "SNAP") val = "유지"
+            } else if (col === "reason") {
+              if (val === "INIT") val = "초기매수"
+              else if (val === "TP") val = "익절"
+              else if (val === "SL") val = "손절"
+              else if (val === "TIME") val = "시간만료"
+              else if (val === "HEARTBEAT") val = "스냅샷"
+            } else if (col === "asof_date" || col === "entry_date" || col === "ts" || col === "날짜") {
+              if (val.length >= 10) {
+                if (val.length > 10) {
+                  let datePart = val.substring(5, 10)
+                  let timePart = val.substring(11, 16)
+                  val = datePart + " " + timePart
+                } else {
+                  val = val.substring(5)
+                }
+              }
+            } else if (!noFormatCols.includes(col) && !isNaN(val) && val !== "") {
+              val = new Intl.NumberFormat("ko-KR").format(parseFloat(val.replace(/[_ ,]/g,"")))
+            }
+            td.textContent = val
+            tr.appendChild(td)
+          })
+          if (withPnL) {
+            let td = document.createElement("td")
+            let buy = parseFloat((row["매입단가"] || "0").replace(/[_ ,]/g,""))
+            let now = parseFloat((row["현재가"] || "0").replace(/[_ ,]/g,""))
+            if (now > buy) td.innerHTML = '<span style="color:#e57373; font-weight:600;">이익</span>'
+            else if (now < buy) td.innerHTML = '<span style="color:#64b5f6; font-weight:600;">손해</span>'
+            else td.innerHTML = '<span style="color:#e0e0e0;">-</span>'
+            tr.appendChild(td)
+          }
+          tbody.appendChild(tr)
+        })
+      }
+    })
+  }
+
+  loadCardData()
+  loadCSVtoTable("/data/results/account_log.csv", "accountTable", false, 5)
+  loadCSVtoTable("/data/results/trades_log.csv", "tradesTable", false, 5)
+  loadCSVtoTable("/data/results/portfolio_summary.csv", "summaryTable")
+  loadCSVtoTable("/data/results/portfolio_holdings.csv", "holdingsTable", true)
+  loadCSVtoTable("/data/results/preds.csv", "predsTable", false, 5)
+  loadCSVtoTable("/data/results/today_recos.csv", "recosTable")
+
+Papa.parse("/data/results/equity_log.csv", {
+  download: true,
+  header: true,
+  complete: function(results) {
+    let rows = results.data.filter(r => r.ts && r.equity)
+    if (rows.length === 0) return
+
+    let firstRow = rows[0]
+    let lastRow = rows[rows.length - 1]
+
+    let equity = parseFloat((lastRow["equity"] || "0").replace(/[_ ,]/g,""))
+    let cumReturn = parseFloat((lastRow["cum_return"] || "0").replace(/[_ ,]/g,"")) * 100
+    let todayPnL = parseFloat((lastRow["total_pnl"] || "0").replace(/[_ ,]/g,"")) -
+                   parseFloat((firstRow["total_pnl"] || "0").replace(/[_ ,]/g,""))
+
+    document.getElementById("card-equity").querySelector("span").textContent =
+      new Intl.NumberFormat("ko-KR").format(equity)
+    document.getElementById("card-return").querySelector("span").textContent =
+      cumReturn.toFixed(2) + "%"
+    document.getElementById("card-todaypnl").querySelector("span").textContent =
+      new Intl.NumberFormat("ko-KR").format(todayPnL)
+  }
+})
+
+Papa.parse("/data/results/equity_log.csv", {
+  download: true,
+  header: true,
+  complete: function(results) {
+    let labels = []
+    let equity = []
+    let cumReturn = []
+
+    results.data.forEach(row => {
+      if (!row.ts) return
+      labels.push(row.ts.substring(5)) // MM-DD hh:mm → 뒤에서 substring
+      if (row.equity) equity.push(parseFloat(row.equity.replace(/[_ ,]/g, "")))
+      if (row.cum_return) cumReturn.push(parseFloat(row.cum_return.replace(/[_ ,]/g, "")) * 100)
+    })
+
+    const ctx1 = document.getElementById("equityChart").getContext("2d")
+    if (window.equityChart && typeof window.equityChart.destroy === "function") window.equityChart.destroy()
+    window.equityChart = new Chart(ctx1, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "총 평가금액",
+          data: equity,
+          borderWidth: 2,
+          borderColor: "#40e0d0",
+          backgroundColor: "rgba(154,196,255,0.15)",
+          pointRadius: 2,
+          tension: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        aspectRatio: 1,
+        scales: {
+          x: { grid: { color: "#555" }, ticks: { display: false } },
+          y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => new Intl.NumberFormat("ko-KR").format(v) } }
+        },
+        plugins: { legend: { labels: { color: "#e0e0e0" } } }
+      }
+    })
+
+    const ctx2 = document.getElementById("cumReturnChart").getContext("2d")
+    if (window.cumReturnChart && typeof window.cumReturnChart.destroy === "function") window.cumReturnChart.destroy()
+    window.cumReturnChart = new Chart(ctx2, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "누적수익률 (%)",
+          data: cumReturn,
+          borderWidth: 2,
+          borderColor: "#ff9800",
+          backgroundColor: "rgba(255, 193, 7, 0.15)",
+          pointRadius: 2,
+          tension: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        aspectRatio: 1,
+        scales: {
+          x: { grid: { color: "#555" }, ticks: { display: false } },
+          y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => v.toFixed(2) + "%" } }
+        },
+        plugins: { legend: { labels: { color: "#e0e0e0" } } }
+      }
+    })
+  }
+})
+
+</script>
+</body>
+</html>

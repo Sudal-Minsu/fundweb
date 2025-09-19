@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Ranking</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <style>
+    html, body { margin: 0; font-family: Arial, sans-serif; background-color: #3a3a3a; color: white; overflow-x: auto; width: 100%; }
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 24px; background-color: #ffffff; border-bottom: 1px solid #ccc; white-space: nowrap; }
+    .nav-left { display: flex; align-items: center; }
+    .nav-left img { height: 32px; margin-right: 10px; }
+    .nav-left a { font-size: 24px; font-family: 'DM Serif Display', serif; color: black; text-decoration: none; letter-spacing: 3px; white-space: nowrap; }
+    .nav-links { display: flex; flex-wrap: nowrap; gap: 8px; }
+    .nav-links a { padding: 6px 12px; text-decoration: none; color: black; font-size: 13px; border-radius: 4px; background-color: #d9d9d9; transition: background-color 0.2s; white-space: nowrap; }
+    .nav-links a:hover, .nav-links a.active { background-color: #c0c0c0; }
+    .home-button { background-color: #52545a !important; color: white !important; }
+    .home-button:hover { background-color: white !important; color: #52545a !important; }
+    .main { padding: 40px 60px; background-color: #3a3a3a; color: white; min-height: 600px; }
+    .chart-wrap { max-width: 1200px; margin: 0 auto 32px; }
+    .chart-card { background: #2f2f2f; border: 1px solid #555; border-radius: 8px; padding: 16px; }
+    .chart-card h3 { margin: 0 0 12px; font-weight: 600; font-size: 18px; color: #e8e8e8; }
+    canvas { width: 100% !important; }
+    table { border-collapse: collapse; margin: 0 auto 40px auto; font-size: 16px; text-align: center; width: 100%; max-width: 1200px; }
+    th, td { border: 1px solid #888; padding: 10px; }
+    th { background-color: #555; color: white; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <img src="{{ url_for('static', filename='seoultech-logo.gif') }}" alt="SEOULTECH Logo">
+      <a href="/home">StockLENS</a>
+      <span style="margin-left: 10px; font-size: 24px; font-family: 'DM Serif Display', serif; color: black;">| Ranking</span>
+    </div>
+    <div class="nav-links">
+      <a href="/home" class="home-button">Home</a>
+      <a href="/daily_trading">Daily Trading</a>
+      <a href="/fullkelly">Full Kelly</a>
+      <a href="/triplebarrier_bot">TripleBarrier Bot</a>
+      <a href="/ranking" class="active">Ranking</a>
+    </div>
+  </nav>
+  <div class="main">
+    <h2 class="one-title">◈ 총 평가금액</h2>
+    <div class="chart-wrap">
+      <div class="chart-card">
+        <h3>총 평가금액 추이</h3>
+        <canvas id="equityChart"></canvas>
+      </div>
+    </div>
+
+    <h2 class="one-title">◈ 누적수익률</h2>
+    <div class="chart-wrap">
+      <div class="chart-card">
+        <h3>누적수익률 추이</h3>
+        <canvas id="returnChart"></canvas>
+      </div>
+    </div>
+
+    <h2 class="one-title">◈ 순위</h2>
+    <table id="rankingTable" class="matrix-table">
+      <thead>
+        <tr>
+          <th>순위</th>
+          <th>라벨</th>
+          <th>최신 시각</th>
+          <th>최신 총 평가금액</th>
+          <th>최신 누적수익률</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    const FILE_RULE1 = "/data/results/평가자료.csv";
+    const FILE_RULE2 = "/data/results/equity_curve.csv";
+    const FILE_RULE3 = "/data/results/equity_log.csv";
+
+    const tickColor = "#e8e8e8";
+    const gridColor = "#555";
+
+    function toNumber(x) {
+      if (x === null || x === undefined) return NaN;
+      if (typeof x === "number") return x;
+      return parseFloat(String(x).replace(/[,_%\s]/g, "").replace(/_/g, ""));
+    }
+
+    function parseRule1(rows) {
+      return rows.map(r => {
+        const d = r["date"];
+        const t = r["time"];
+        const tv = toNumber(r["총평가금액"]);
+        const cr = toNumber(r["누적수익률(%)"]);
+        if (!d || !t) return null;
+        const x = new Date(`${d}T${t}`).getTime();
+        return isNaN(x) ? null : { x, equity: tv, cumPct: cr };
+      }).filter(Boolean).sort((a, b) => a.x - b.x);
+    }
+
+    function parseRule2(rows) {
+      return rows.map(r => {
+        const ts = r["time"];
+        const tv = toNumber(r["total_value"]);
+        const cr = toNumber(r["cum_return"]);
+        const x = ts ? new Date(ts).getTime() : NaN;
+        return isNaN(x) ? null : { x, equity: tv, cumPct: cr * 100 };
+      }).filter(Boolean).sort((a, b) => a.x - b.x);
+    }
+
+    function parseRule3(rows) {
+      return rows.map(r => {
+        const ts = r["ts"];
+        const eq = toNumber(r["equity"]);
+        const cr = toNumber(r["cum_return"]);
+        const x = ts ? new Date(ts).getTime() : NaN;
+        return isNaN(x) ? null : { x, equity: eq, cumPct: cr * 100 };
+      }).filter(Boolean).sort((a, b) => a.x - b.x);
+    }
+
+    function loadCSV(url) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(url, { download: true, header: true, skipEmptyLines: true, complete: res => resolve(res.data), error: reject });
+      });
+    }
+
+    function lastValid(arr, key) {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (!isNaN(arr[i][key])) return arr[i];
+      }
+      return null;
+    }
+
+    function fmtMoney(v) {
+      return isNaN(v) ? "알 수 없음" : Number(v).toLocaleString("ko-KR");
+    }
+
+    function fmtPct(v) {
+      return isNaN(v) ? "알 수 없음" : `${Number(v).toFixed(2)}%`;
+    }
+
+    function fmtTime(ms) {
+      if (!ms || isNaN(ms)) return "알 수 없음";
+      const d = new Date(ms);
+      const MM = String(d.getMonth() + 1).padStart(2, "0");
+      const DD = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${MM}-${DD} ${hh}:${mm}`;
+    }
+
+    function buildCharts(r1, r2, r3) {
+      const ctx1 = document.getElementById("equityChart").getContext("2d");
+      const ctx2 = document.getElementById("returnChart").getContext("2d");
+
+      const commonOptions = {
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 2,
+        plugins: { legend: { labels: { color: tickColor } } },
+        scales: {
+          x: { type: "time", ticks: { color: tickColor }, grid: { color: gridColor } },
+          y: { ticks: { color: tickColor }, grid: { color: gridColor } }
+        }
+      };
+
+      new Chart(ctx1, {
+        type: "line",
+        data: {
+          datasets: [
+            { label: "Choi", data: r1.map(d => ({ x: d.x, y: d.equity })), borderColor: "#66BB6A", backgroundColor: "#66BB6A", borderWidth: 2, tension: 0.2 },
+            { label: "Jin", data: r2.map(d => ({ x: d.x, y: d.equity })), borderColor: "#BA68C8", backgroundColor: "#BA68C8", borderWidth: 2, tension: 0.2 },
+            { label: "Ko", data: r3.map(d => ({ x: d.x, y: d.equity })), borderColor: "#FFB74D", backgroundColor: "#FFB74D", borderWidth: 2, tension: 0.2 }
+          ]
+        },
+        options: commonOptions
+      });
+
+      const returnOptions = JSON.parse(JSON.stringify(commonOptions));
+      returnOptions.scales.y = { ticks: { color: tickColor, callback: v => `${v}%` }, grid: { color: gridColor } };
+
+      new Chart(ctx2, {
+        type: "line",
+        data: {
+          datasets: [
+            { label: "Choi", data: r1.map(d => ({ x: d.x, y: d.equity })), borderColor: "#66BB6A", backgroundColor: "#66BB6A", borderWidth: 2, tension: 0.2 },
+            { label: "Jin", data: r2.map(d => ({ x: d.x, y: d.equity })), borderColor: "#BA68C8", backgroundColor: "#BA68C8", borderWidth: 2, tension: 0.2 },
+            { label: "Ko", data: r3.map(d => ({ x: d.x, y: d.equity })), borderColor: "#FFB74D", backgroundColor: "#FFB74D", borderWidth: 2, tension: 0.2 }
+          ]
+        },
+        options: returnOptions
+      });
+    }
+
+    function buildRanking(r1, r2, r3) {
+      const latest = [
+        { label: "Choi", last: lastValid(r1, "cumPct") },
+        { label: "Jin", last: lastValid(r2, "cumPct") },
+        { label: "Ko", last: lastValid(r3, "cumPct") }
+      ].map(d => ({
+        label: d.label,
+        cumPct: d.last ? d.last.cumPct : NaN,
+        equity: d.last ? d.last.equity : NaN,
+        ts: d.last ? d.last.x : NaN
+      }));
+
+      latest.sort((a, b) => (isNaN(b.cumPct) ? -Infinity : b.cumPct) - (isNaN(a.cumPct) ? -Infinity : a.cumPct));
+
+      const tbody = document.querySelector("#rankingTable tbody");
+      tbody.innerHTML = "";
+      latest.forEach((row, idx) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${isFinite(row.cumPct) ? idx + 1 : "-"}</td>
+          <td>${row.label}</td>
+          <td>${fmtTime(row.ts)}</td>
+          <td>${fmtMoney(row.equity)}</td>
+          <td>${fmtPct(row.cumPct)}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    Promise.all([loadCSV(FILE_RULE1), loadCSV(FILE_RULE2), loadCSV(FILE_RULE3)])
+      .then(([r1raw, r2raw, r3raw]) => {
+        const r1 = parseRule1(r1raw);
+        const r2 = parseRule2(r2raw);
+        const r3 = parseRule3(r3raw);
+        buildCharts(r1, r2, r3);
+        buildRanking(r1, r2, r3);
+      })
+      .catch(() => {
+        document.querySelector("#rankingTable tbody").innerHTML = '<tr><td colspan="5">데이터를 불러올 수 없습니다</td></tr>';
+      });
+  </script>
+</body>
+</html>
