@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, time as dtime
 from pathlib import Path
 import pymysql
-from config_choi import DB_CONFIG, get_api_keys, ACCOUNT_INFO
+from config import DB_CONFIG, get_account
 
 # ───────────── 설정 ─────────────
 OUTPUT_DIR = os.path.join("data", "results")
@@ -15,6 +15,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 종목당 투자금: 전일 거래대금의 0.25%
 INVEST_RATE_FROM_PREV_TV = 0.0025
+
+account = get_account("acc1")
+APP_KEY     = account["APP_KEY"]
+APP_SECRET  = account["APP_SECRET"]
+ACCOUNT_INFO = account["ACCOUNT_INFO"]
 
 # ───────────── 시간 상수 ─────────────
 CANCEL_BUY_TIME   = dtime(14, 55)
@@ -49,10 +54,7 @@ SESSION = {
 }
 
 def _resolve_api_keys(app_key=None, app_secret=None):
-    if app_key and app_secret:
-        return app_key, app_secret
-    k, s = get_api_keys()
-    return k, s
+    return app_key or APP_KEY, app_secret or APP_SECRET
 
 def init_session(app_key=None, app_secret=None, url_base=None):
     if url_base:
