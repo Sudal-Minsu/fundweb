@@ -20,7 +20,7 @@ from config import DB_CONFIG
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 10
 BACKTEST_START_DATE = pd.to_datetime("2024-07-01")
-TEST_PERIOD_DAYS = 300
+TEST_PERIOD_DAYS = 500
 SEQ_LEN = 5
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001

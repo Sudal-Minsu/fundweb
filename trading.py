@@ -33,11 +33,11 @@ POST_SELL_CHECK_INTERVAL_SEC = 5 * 60
 # 상태 파일
 BOUGHT_TODAY_PATH       = os.path.join(OUTPUT_DIR, "bought_today.json")
 NOT_TRADABLE_TODAY_PATH = os.path.join(OUTPUT_DIR, "not_tradable_today.json")
-DAILY_PNL_CSV           = os.path.join(OUTPUT_DIR, "평가자료.csv")
+DAILY_PNL_CSV           = os.path.join(OUTPUT_DIR, "eval.csv")
 
 # 스냅샷 파일
-PORTFOLIO_CSV = os.path.join(OUTPUT_DIR, "포트폴리오.csv")
-HOLDINGS_CSV  = os.path.join(OUTPUT_DIR, "보유종목.csv")
+PORTFOLIO_CSV = os.path.join(OUTPUT_DIR, "portfolio_choi.csv")
+HOLDINGS_CSV  = os.path.join(OUTPUT_DIR, "holdings.csv")
 
 # ───────────── 세션/인증 상태 ─────────────
 SESSION = {
@@ -667,7 +667,7 @@ def save_portfolio_snapshot(now_dt, holdings, summary=None):
     }
     df = pd.DataFrame([row])
     df.to_csv(PORTFOLIO_CSV, mode="w", index=False, encoding="utf-8-sig")
-    print(f"💾 포트폴리오 스냅샷 → {PORTFOLIO_CSV}", flush=True)
+    print(f"💾 portfolio_choi.csv 스냅샷 → {PORTFOLIO_CSV}", flush=True)
 
 def save_holdings_snapshot(now_dt, holdings):
     rows = []
@@ -683,10 +683,10 @@ def save_holdings_snapshot(now_dt, holdings):
     if rows:
         df = pd.DataFrame(rows)
     else:
-        print("ℹ️ 보유 내역 없음: 빈 보유종목 파일로 저장", flush=True)
+        print("ℹ️ 보유 내역 없음: 빈 holdings.csv 파일로 저장", flush=True)
         df = pd.DataFrame(columns=["date","time","종목코드","보유수량","매입평균가격","현재가"])
     df.to_csv(HOLDINGS_CSV, mode="w", index=False, encoding="utf-8-sig")
-    print(f"💾 보유종목 스냅샷 → {HOLDINGS_CSV}", flush=True)
+    print(f"💾 holdings.csv 스냅샷 → {HOLDINGS_CSV}", flush=True)
 
 # ───────────── 로그 ─────────────
 def log_trade(timestamp, stock_code, price, qty, order_type, order_result, extra=None):
@@ -782,8 +782,8 @@ def has_open_orders(today_orders=None):
 
 def save_all_before_exit(tag="early_exit"):
     """
-    조기/마감 종료 직전 저장. (요청에 따라 포트폴리오/보유종목 저장 생략)
-    - 15:00에 이미 스냅샷을 저장하므로 여기서는 '평가자료.csv'만 append.
+    조기/마감 종료 직전 저장. (요청에 따라 portfolio_choi.csv/holdings.csv 저장 생략)
+    - 15:00에 이미 스냅샷을 저장하므로 여기서는 'eval.csv'만 append.
     """
     now = datetime.now()
     try:
@@ -794,7 +794,7 @@ def save_all_before_exit(tag="early_exit"):
     try:
         append_daily_pnl(now, total_eval_amount)
     except Exception as e:
-        print(f"⚠️ 평가자료 저장 오류: {e}", flush=True)
+        print(f"⚠️ eval.csv 저장 오류: {e}", flush=True)
 
     print(f"🛑 [{tag}] 조기/마감 종료 직전 저장 완료 → 종료합니다.", flush=True)
     sys.exit(0)
@@ -994,7 +994,7 @@ def do_force_sell_and_snapshot():
     print("↩️ 15:00 강제 매도 주문 발행 완료 — 5분 간격 모니터링으로 전환", flush=True)
     monitor_after_3pm_for_idle_exit()
 
-# ───────────── 마감(15:30) 전용: 평가자료만 저장 후 종료 ─────────────
+# ───────────── 마감(15:30) 전용: eval.csv만 저장 후 종료 ─────────────
 def save_pnl_only_and_exit(tag="market_close"):
     now = datetime.now()
     try:
@@ -1005,13 +1005,13 @@ def save_pnl_only_and_exit(tag="market_close"):
     try:
         append_daily_pnl(now, total_eval_amount)
     except Exception as e:
-        print(f"⚠️ 평가자료 저장 오류: {e}", flush=True)
+        print(f"⚠️ eval.csv 저장 오류: {e}", flush=True)
 
     print(f"🛑 [{tag}] 마감 저장 완료 → 종료합니다.", flush=True)
     sys.exit(0)
 
 def do_market_close_and_exit():
-    # 마감 시에는 평가자료.csv만 저장하고 종료
+    # 마감 시에는 eval.csv만 저장하고 종료
     save_pnl_only_and_exit(tag="market_close")
 
 def build_today_events(today_candidates, bought_today, not_tradable_today, prev_tv_map):
