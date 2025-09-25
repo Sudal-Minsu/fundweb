@@ -75,7 +75,7 @@ def serve_csv(folder, filename):
     allowed_dirs = ["results"]
     if folder not in allowed_dirs:
         abort(403) 
-    base_dir = os.path.join(app.root_path, folder)
+    base_dir = os.path.join(app.root_path, "data", folder)
     return send_from_directory(base_dir, filename)
 
 # 🔹 Flask 실행

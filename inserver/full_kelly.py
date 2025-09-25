@@ -482,6 +482,15 @@ if __name__ == "__main__":
 
             now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+            cash = INITIAL_ASSET - sum(pos['qty'] * pos['buy_price'] for pos in portfolio.values())
+            total_value = cash
+            for code, pos in portfolio.items():
+                shares = int(pos.get('qty', 0))
+                if shares > 0:
+                    last_price = get_current_price(code)
+                    if last_price:
+                        total_value += shares * last_price
+
             cum_return = (total_value / INITIAL_ASSET) - 1.0
 
             equity_curve.append({
@@ -490,11 +499,14 @@ if __name__ == "__main__":
                 "cum_return": round(cum_return, 6)
             })
 
+            csv_path = Path(OUTPUT_DIR) / "equity_curve.csv"
             pd.DataFrame(equity_curve).to_csv(
-                Path(OUTPUT_DIR) / "equity_curve.csv",
+                csv_path,
                 index=False,
                 encoding='utf-8-sig'
             )
+            print(f"💾 equity_curve 저장 완료: {csv_path}", flush=True)
+
 
             print(f"[Loop {loop_count}] 평가금액: {total_value:,.0f}, 누적수익률: {cum_return*100:.2f}%", flush=True)
 

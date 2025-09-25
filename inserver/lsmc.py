@@ -257,7 +257,7 @@ def wait_until_all_non_candidate_sold(access_token, app_key, app_secret, portfol
                 real_shares = get_real_balance_qty(access_token, app_key, app_secret, stock_code)
                 if real_shares > 0:
                     last_price = get_current_price(access_token, app_key, app_secret, stock_code)
-                    order_result = send_order(access_token, app_key, app_secret, stock_code, last_price, qty=real_shares, order_type="매도")
+                    order_result = send_order(access_token, app_key, app_secret, account_info, stock_code, last_price, qty=real_shares, order_type="매도")
                     print(f"🔁 [비후보 종목 매도] {stock_code}: {real_shares}주 → {order_result}", flush=True)
                     log_trade(datetime.now(), stock_code, last_price, 0, 0, 0, 0, real_shares, "매도", order_result)
                     if order_result.get("rt_cd") == "0" or order_result.get("msg_cd") == "40240000":
@@ -448,7 +448,7 @@ if __name__ == "__main__":
                 if optimal_qty > current_qty:
                     add_qty = optimal_qty - current_qty
                     if add_qty > 0:
-                        order_result = send_order(access_token, app_key, app_secret, stock_code, price, qty=add_qty, order_type="매수")
+                        order_result = send_order(access_token, app_key, app_secret, account_info, stock_code, price, qty=add_qty, order_type="매수")
                         print(f"✅ 추가 매수 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, r['prob_up'],
                                   r['expected_profit'], r['expected_loss'], r['rr_ratio'],
@@ -462,7 +462,7 @@ if __name__ == "__main__":
                 elif optimal_qty < current_qty:
                     sell_qty = current_qty - optimal_qty
                     if sell_qty > 0:
-                        order_result = send_order(access_token, app_key, app_secret, stock_code, price, qty=sell_qty, order_type="매도")
+                        order_result = send_order(access_token, app_key, app_secret, account_info, stock_code, price, qty=sell_qty, order_type="매도")
                         print(f"부분 매도 요청 결과: {order_result}", flush=True)
                         log_trade(datetime.now(), stock_code, price, r['prob_up'],
                                   r['expected_profit'], r['expected_loss'], r['rr_ratio'],
