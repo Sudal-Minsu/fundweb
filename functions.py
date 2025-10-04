@@ -393,7 +393,7 @@ def auto_sell_on_horizon(app_key, app_secret, access_token, horizon=6):
 def plot_equity_and_return_from_csv():
     # 기간 설정(포함 범위)
     RANGE_START = "2025-09-01"
-    RANGE_END   = "2025-10-03"
+    RANGE_END   = "2025-10-02"
     
     if not os.path.exists(CSV_PATH):
         print("CSV가 없습니다:", CSV_PATH)
