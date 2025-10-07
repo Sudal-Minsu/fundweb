@@ -1,6 +1,5 @@
 # 로컬 전용/민감 파일
 access_token.json
-config.py
 log.txt
 __pycache__
 logs
