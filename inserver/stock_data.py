@@ -49,7 +49,7 @@ def fetch_market_page(market_type, page, field_ids):
     return df
 
 # 유니버스 추출 함수
-# ROE, PER, 시가총액, 영업이익증가율을 모두 활용하며 각각 가중치 적용
+# 시가총액을 활용하며 가중치 적용
 def get_top_200_codes():
     all_markets = []
     for market_type in [1]:  # 코스닥만 대상

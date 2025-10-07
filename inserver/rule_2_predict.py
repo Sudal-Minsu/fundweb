@@ -47,7 +47,8 @@ else:
     print("지정된 폰트를 찾을 수 없습니다.")
 
 # 출력 폴더 설정
-OUTPUT_DIR = os.path.join("data", "results")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # inserver
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results") # inserver/data/results
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 병렬 환경의 비결정성 방지

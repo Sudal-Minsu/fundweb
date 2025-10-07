@@ -42,7 +42,7 @@ def create_tables_if_not_exist():
     create_market_index_table_sql = """
     CREATE TABLE IF NOT EXISTS market_index (
         Date DATE NOT NULL,
-        IndexType VARCHAR(20) NOT NULL,  -- 'KOSPI', 'KOSDAQ', 'USD_KRW', 'US_RATE' 
+        IndexType VARCHAR(20) NOT NULL,  -- 'KOSPI', 'KOSDAQ', 'USD_KRW'
         Close FLOAT,
         PRIMARY KEY (Date, IndexType)
     );
