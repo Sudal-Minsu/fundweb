@@ -10,7 +10,8 @@ import pymysql
 from config import DB_CONFIG, get_account
 
 # ───────────── 설정 ─────────────
-OUTPUT_DIR = os.path.join("data", "results")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # inserver
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results") # inserver/data/results
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 종목당 투자금: 전일 거래대금의 0.25%
