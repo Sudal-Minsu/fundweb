@@ -10,7 +10,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sqlalchemy import create_engine
 from collections import Counter
 from pandas.tseries.offsets import BDay
-from config import DB_CONFIG
+from config_ko import DB_CONFIG
 warnings.filterwarnings("ignore")
 
 # ===== 하이퍼파라미터 =====
@@ -21,8 +21,8 @@ LR         = 0.002188011423490845
 EPOCHS     = 9
 P_THRESHOLD = 0.53
 K_MAX       = 4
-TP_PCT      = 0.03
-SL_PCT      = 0.03
+TP_PCT      = 0.04
+SL_PCT      = 0.02
 HORIZON     = 6
 COMMISSION  = 0.003
 ROLL_NORM   = 60
@@ -349,9 +349,9 @@ def main():
     picks = select_today_recos(pred_df, code2df, k=K_MAX, p_thr=P_THRESHOLD)
 
     # 저장 & 프린트
-    os.makedirs('results', exist_ok=True)
-    pred_df.to_csv('results/preds.csv', index=False)
-    picks.to_csv('results/today_recos.csv', index=False)
+    os.makedirs('results_3', exist_ok=True)
+    pred_df.to_csv('results_3/preds.csv', index=False)
+    picks.to_csv('results_3/today_recos.csv', index=False)
 
     if picks.empty:
         print("[TODAY] 오늘자 추천이 없습니다. (데이터 최신 여부 확인)")
@@ -365,7 +365,7 @@ def main():
         view['entry_px'] = view['entry_px'].round(2)
         # 프린트
         print(view.to_string(index=False))
-        print("\n[SAVE] results/today_recos.csv")
+        print("\n[SAVE] results_3/today_recos.csv")
 
     print(f"[DEBUG] preds entry_date range: {pred_df['entry_date'].min().date()} ~ {pred_df['entry_date'].max().date()}")
     print(f"[DEBUG] DB last date (참고): {max(dp['Date'].max() for dp in code2df.values() if len(dp)).date()}")
