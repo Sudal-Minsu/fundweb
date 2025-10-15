@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import time
 import json
 import requests
@@ -13,87 +12,47 @@ import matplotlib.pyplot as plt
 import shutil
 
 # ─────────────────────────────────────────────
-# 경로 표준화: inserver 기준으로 저장/로그를 고정
+# inserver 기준 경로 고정
 # ─────────────────────────────────────────────
-THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(THIS_DIR)
-INSERVER_DIR = os.path.join(REPO_ROOT, "inserver")
-
-# inserver 폴더가 있으면 그쪽을 기준으로, 없으면 현재 파일 경로 기준
-if os.path.isdir(INSERVER_DIR):
-    BASE_DIR = INSERVER_DIR
-else:
-    BASE_DIR = THIS_DIR
-
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))     # .../fundweb/inserver
 OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
 LOG_DIR    = os.path.join(BASE_DIR, "logs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# 상위 폴더 모듈 import 가능하도록 path 보정 (config_Jin.py 등)
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+BUYLIST_PATH   = os.path.join(OUTPUT_DIR, "buy_list.csv")
+LOG_FILE       = Path(OUTPUT_DIR) / "trade_log.csv"
+PORTFOLIO_PATH = os.path.join(BASE_DIR, "portfolio.json")
 
 # ─────────────────────────────────────────────
-# config_Jin.py에서 개인정보/설정 가져오기
-#  - 필요한 항목: DB_CONFIG, get_api_keys(), ACCOUNT_INFO
+# 설정 파일: inserver/config_local.py
 # ─────────────────────────────────────────────
 try:
-    from config_Jin import DB_CONFIG, get_api_keys, ACCOUNT_INFO
+    from config_local import DB_CONFIG, get_api_keys, ACCOUNT_INFO
 except Exception as e:
-    print("❌ config_Jin.py 불러오기 실패! 상위 폴더(fundweb/)에 있고, 아래를 제공하는지 확인하세요.")
-    print("   - DB_CONFIG (dict)")
-    print("   - get_api_keys() -> (app_key, app_secret)")
-    print("   - ACCOUNT_INFO (dict: CANO, ACNT_PRDT_CD)")
+    print("❌ config_local.py 불러오기 실패! inserver 폴더에 존재해야 합니다.")
+    print("   - config_local.py (secrets.json을 읽어 app_key/app_secret, CANO/ACNT_PRDT_CD 제공)")
+    print("   - secrets.json (상시모의투자 키/계좌)")
     print(f"오류: {e}")
-    sys.exit(1)
+    raise SystemExit(1)
 
 # ─────────────────────────────────────────────
-# [전략/실행 설정]
+# 전략/실행 설정
 # ─────────────────────────────────────────────
+USE_FULL_EQUITY        = True
+EQUITY_UTILIZATION     = 1.0   # 100%
+TOTAL_BUY_BUDGET_ALL   = 100_000_000
+MAX_BUY_BUDGET         = 10_000_000
 
-# ✅ 출력/그래프/로그 저장 폴더: inserver/data/results (영문화)
-#   - buy_list.csv도 OUTPUT_DIR에서 찾습니다.
-BUYLIST_PATH = os.path.join(OUTPUT_DIR, "buy_list.csv")
-
-# 매매 로그 파일 (영문화)
-LOG_FILE = Path(OUTPUT_DIR) / "trade_log.csv"
-
-# 과거 로그 자동 이동(선택): 예전 위치에서 새 표준 위치로
-OLD_LOG_FILE = Path("full_kelly_결과") / "trade_log.csv"
-if OLD_LOG_FILE.exists() and not LOG_FILE.exists():
-    try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(OLD_LOG_FILE), str(LOG_FILE))
-        print(f"기존 로그를 {OLD_LOG_FILE} → {LOG_FILE} 로 이동했습니다.")
-    except Exception as e:
-        print(f"기존 로그 이동 실패: {e}")
-
-# ✅ 전체 자산을 f값 비율로 전부 사용 여부
-USE_FULL_EQUITY = True
-EQUITY_UTILIZATION = 1.0  # 100%
-
-# (기본값) 총 매수 예산(이번 루프 전체) — USE_FULL_EQUITY=False일 때만 사용
-TOTAL_BUY_BUDGET_ALL = 100_000_000
-# 종목당 최대 매수 예산 상한
-MAX_BUY_BUDGET = 10_000_000
-
-# 손절/익절 규칙(손익비 R = TAKE/STOP)
-STOP_LOSS_PCT   = 0.025  # -2.5%
-TAKE_PROFIT_PCT = 0.05   # +5%
-
-# 총 노출 한도 적용 여부
+STOP_LOSS_PCT          = 0.025   # -2.5%
+TAKE_PROFIT_PCT        = 0.05    # +5%
 ENFORCE_TOTAL_BUDGET_CAP = True
 
-# 포지션 유지/정리 정책
-SELL_NON_CANDIDATES      = True   # 후보에 없는 종목 전량 정리
-CHECK_TP_SL_EVERY_LOOP   = True   # 매 루프마다 TP/SL 점검
+SELL_NON_CANDIDATES    = True
+CHECK_TP_SL_EVERY_LOOP = True
 
-# API 키 불러오기
-app_key, app_secret = get_api_keys()
-if not app_key or not app_secret:
-    print("❌ app_key/app_secret이 비어 있습니다. config_Jin.py의 get_api_keys()를 확인하세요.")
-    sys.exit(1)
+# 실주문 방지 스위치 (기본 ON)
+DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
 
 # 모의투자 베이스 URL
 url_base = "https://openapivts.koreainvestment.com:29443"
@@ -116,8 +75,12 @@ def adjust_price_to_tick(price: int) -> int:
         tick = 1000
     return int(price - (price % tick))
 
-# ───────────── 토큰 발급 ─────────────
+# ───────────── 토큰 ─────────────
 def issue_access_token():
+    app_key, app_secret = get_api_keys()
+    if not app_key or not app_secret:
+        print("❌ app_key/app_secret 비어 있음.")
+        raise SystemExit(1)
     res = requests.post(
         f"{url_base}/oauth2/tokenP",
         headers={"content-type": "application/json"},
@@ -130,18 +93,18 @@ def issue_access_token():
     try:
         j = res.json()
     except Exception:
-        print("❌ 토큰 응답 JSON 파싱 실패:", res.text)
-        sys.exit(1)
+        print("❌ 토큰 JSON 파싱 실패:", res.text)
+        raise SystemExit(1)
     token = j.get("access_token", "")
     if not token:
         print("❌ 액세스 토큰 발급 실패:", j)
-        sys.exit(1)
-    print("🔐 액세스 토큰 발급 성공.\n", flush=True)
-    return token
+        raise SystemExit(1)
+    print("🔐 액세스 토큰 발급 성공", flush=True)
+    return token, app_key, app_secret
 
-access_token = issue_access_token()
+access_token, app_key, app_secret = issue_access_token()
 
-# ───────────── 시세/잔고/주문 API ─────────────
+# ───────────── API ─────────────
 def get_current_price(stock_code: str) -> int | None:
     url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-price"
     headers = {
@@ -149,19 +112,18 @@ def get_current_price(stock_code: str) -> int | None:
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
-        "tr_id": "FHKST01010100",
+        "tr_id": "FHKST01010100"
     }
     params = {
         "fid_cond_mrkt_div_code": "J",
-        "fid_input_iscd": stock_code,
+        "fid_input_iscd": stock_code
     }
     res = requests.get(url, headers=headers, params=params)
     time.sleep(1.2)
     if res.status_code != 200:
         return None
     try:
-        j = res.json()
-        pr = int(j['output']['stck_prpr'])
+        pr = int(res.json()['output']['stck_prpr'])
         return adjust_price_to_tick(pr)
     except Exception:
         return None
@@ -173,7 +135,7 @@ def get_real_balance_qty(stock_code: str) -> int:
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
-        "tr_id": "VTTC8434R",
+        "tr_id": "VTTC8434R"
     }
     params = {
         "CANO": ACCOUNT_INFO["CANO"],
@@ -186,7 +148,7 @@ def get_real_balance_qty(stock_code: str) -> int:
         "FNCG_AMT_AUTO_RDPT_YN": "N",
         "PRCS_DVSN": "01",
         "CTX_AREA_FK100": "",
-        "CTX_AREA_NK100": "",
+        "CTX_AREA_NK100": ""
     }
     res = requests.get(url, headers=headers, params=params)
     time.sleep(1.2)
@@ -215,6 +177,8 @@ def get_hashkey(data: dict) -> str:
         return ""
 
 def send_order(stock_code: str, price: int, qty: int, order_type: str = "매수") -> dict:
+    if DRY_RUN:
+        return {"rt_cd": "0", "msg1": "DRY_RUN: no order sent"}
     url = f"{url_base}/uapi/domestic-stock/v1/trading/order-cash"
     tr_id = "VTTC0802U" if order_type == "매수" else "VTTC0801U"
     adjusted_price = adjust_price_to_tick(price)
@@ -224,16 +188,15 @@ def send_order(stock_code: str, price: int, qty: int, order_type: str = "매수"
         "PDNO": stock_code,
         "ORD_DVSN": "00",
         "ORD_QTY": str(int(qty)),
-        "ORD_UNPR": str(int(adjusted_price)),
+        "ORD_UNPR": str(int(adjusted_price))
     }
-    hashkey = get_hashkey(data)
     headers = {
         "Content-Type": "application/json",
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
         "tr_id": tr_id,
-        "hashkey": hashkey,
+        "hashkey": get_hashkey(data)
     }
     res = requests.post(url, headers=headers, data=json.dumps(data))
     time.sleep(1.2)
@@ -242,7 +205,6 @@ def send_order(stock_code: str, price: int, qty: int, order_type: str = "매수"
     except Exception:
         return {"rt_cd": "-1", "msg1": "INVALID_JSON"}
 
-# ───────────── 계좌 총자산(예수금+보유평가) 조회 ─────────────
 def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int, int]:
     """
     반환: (total_equity, cash, stock_eval)
@@ -253,7 +215,7 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         "authorization": f"Bearer {access_token}",
         "appKey": app_key,
         "appSecret": app_secret,
-        "tr_id": "VTTC8434R",
+        "tr_id": "VTTC8434R"
     }
     params = {
         "CANO": ACCOUNT_INFO["CANO"],
@@ -266,7 +228,7 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         "FNCG_AMT_AUTO_RDPT_YN": "N",
         "PRCS_DVSN": "01",
         "CTX_AREA_FK100": "",
-        "CTX_AREA_NK100": "",
+        "CTX_AREA_NK100": ""
     }
     cash = 0
     stock_eval = 0
@@ -275,46 +237,45 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         res = requests.get(url, headers=headers, params=params)
         time.sleep(1.2)
         j = res.json()
+
         out2 = (j.get("output2") or [{}])[0]
         if isinstance(out2, dict):
             for k in ["dnca_tot_amt", "dnca_avlb_amt", "nxdy_excc_amt", "prvs_rcdl_excc_amt"]:
                 if k in out2 and str(out2[k]).strip():
-                    cash = int(float(out2[k])); break
+                    cash = int(float(out2[k]))
+                    break
             for k in ["tot_evlu_amt", "scts_evlu_amt", "evlu_amt_smtl"]:
                 if k in out2 and str(out2[k]).strip():
-                    stock_eval = int(float(out2[k])); break
+                    stock_eval = int(float(out2[k]))
+                    break
 
-        out1 = j.get("output1", [])
         tmp_eval = 0
-        if isinstance(out1, list) and len(out1) > 0:
-            for it in out1:
-                try:
-                    qty = int(it.get("hldg_qty", 0))
-                    prpr = int(it.get("prpr", 0))
-                    if prpr <= 0:
-                        cd = it.get("pdno")
-                        last = get_current_price(cd) if cd else 0
-                        prpr = last or 0
-                    tmp_eval += qty * prpr
-                except Exception:
-                    pass
+        for it in j.get("output1", []):
+            try:
+                qty = int(it.get("hldg_qty", 0))
+                prpr = int(it.get("prpr", 0))
+                if prpr <= 0:
+                    cd = it.get("pdno")
+                    last = get_current_price(cd) if cd else 0
+                    prpr = last or 0
+                tmp_eval += qty * prpr
+            except Exception:
+                pass
         if tmp_eval > 0:
             stock_eval = tmp_eval
 
         if stock_eval and cash:
             total_equity = stock_eval + cash
-        elif stock_eval and not cash:
+        elif stock_eval:
             total_equity = stock_eval
-        elif not stock_eval and cash:
+        elif cash:
             total_equity = cash
         else:
             est = 0
             if portfolio_snapshot:
                 for code, pos in portfolio_snapshot.items():
                     try:
-                        qty = int(pos.get("qty", 0))
-                        last = get_current_price(code) or 0
-                        est += qty * last
+                        est += int(pos.get("qty", 0)) * (get_current_price(code) or 0)
                     except Exception:
                         pass
             total_equity = est
@@ -323,9 +284,7 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         if portfolio_snapshot:
             for code, pos in portfolio_snapshot.items():
                 try:
-                    qty = int(pos.get("qty", 0))
-                    last = get_current_price(code) or 0
-                    est += qty * last
+                    est += int(pos.get("qty", 0)) * (get_current_price(code) or 0)
                 except Exception:
                     pass
         total_equity = est
@@ -333,23 +292,17 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         stock_eval = est
     return int(total_equity), int(cash), int(stock_eval)
 
-# ───────────── 포트폴리오 & 로깅 (inserver 기준 경로) ─────────────
-PORTFOLIO_PATH = os.path.join(BASE_DIR, "portfolio.json")
-
+# ───────────── 포트폴리오 & 로깅 ─────────────
 def load_portfolio() -> dict:
-    path = Path(PORTFOLIO_PATH)
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    p = Path(PORTFOLIO_PATH)
+    return json.load(open(p, "r", encoding="utf-8")) if p.exists() else {}
 
 def save_portfolio(data: dict):
-    with open(PORTFOLIO_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    json.dump(data, open(PORTFOLIO_PATH, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 def log_trade(timestamp, stock_code, price, p, R, fstar, qty, order_type, order_result):
     ts = timestamp if isinstance(timestamp, str) else timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = {
+    entry = {
         "timestamp": ts,
         "code": stock_code,
         "price": int(price),
@@ -362,97 +315,91 @@ def log_trade(timestamp, stock_code, price, p, R, fstar, qty, order_type, order_
     }
     if LOG_FILE.exists():
         df = pd.read_csv(LOG_FILE)
-        df = pd.concat([df, pd.DataFrame([log_entry])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
     else:
-        df = pd.DataFrame([log_entry])
+        df = pd.DataFrame([entry])
     df.to_csv(LOG_FILE, index=False, encoding='utf-8-sig')
 
 # ───────────── 보조: 비후보 정리 & TP/SL ─────────────
 def wait_until_all_non_candidate_sold(portfolio: dict, current_buy_codes: set[str]):
     if not SELL_NON_CANDIDATES:
         return
-    has_non_candidates = True
-    while has_non_candidates:
-        has_non_candidates = False
-        for stock_code in list(portfolio.keys()):
-            if stock_code not in current_buy_codes:
-                real_shares = get_real_balance_qty(stock_code)
+    has_non = True
+    while has_non:
+        has_non = False
+        for code in list(portfolio.keys()):
+            if code not in current_buy_codes:
+                real_shares = get_real_balance_qty(code)
                 if real_shares > 0:
-                    last_price = get_current_price(stock_code)
-                    order_result = send_order(stock_code, last_price, qty=real_shares, order_type="매도")
-                    print(f"🔁 [비후보 종목 매도] {stock_code}: {real_shares}주 → {order_result}", flush=True)
-                    log_trade(datetime.now(), stock_code, last_price, portfolio[stock_code].get("p", 0),
-                              portfolio[stock_code].get("R", 0), portfolio[stock_code].get("fstar", 0),
-                              real_shares, "매도", order_result)
-                    if order_result.get("rt_cd") == "0" or order_result.get("msg_cd") == "40240000":
-                        del portfolio[stock_code]
-                        has_non_candidates = True
+                    last_price = get_current_price(code) or 0
+                    res = send_order(code, last_price, qty=real_shares, order_type="매도")
+                    print(f"🔁 [비후보 매도] {code}: {real_shares}주 → {res}", flush=True)
+                    log_trade(datetime.now(), code, last_price,
+                              portfolio[code].get("p", 0),
+                              portfolio[code].get("R", 0),
+                              portfolio[code].get("fstar", 0),
+                              real_shares, "매도", res)
+                    if res.get("rt_cd") == "0" or res.get("msg_cd") == "40240000":
+                        del portfolio[code]
+                        has_non = True
                 else:
-                    del portfolio[stock_code]
-                    has_non_candidates = True
-        if has_non_candidates:
-            print("비후보 종목 매도 체결 대기중... 10초 대기", flush=True)
+                    del portfolio[code]
+                    has_non = True
+        if has_non:
+            print("비후보 정리 체결 대기… 10초", flush=True)
             time.sleep(10)
 
 def check_takeprofit_stoploss(portfolio: dict):
     if not CHECK_TP_SL_EVERY_LOOP:
         return
-    for stock_code, pos in list(portfolio.items()):
+    for code, pos in list(portfolio.items()):
         shares = int(pos.get('qty', 0))
         if shares <= 0:
             continue
-        last_price = get_current_price(stock_code)
-        if last_price is None:
+        last = get_current_price(code)
+        if last is None:
             continue
         tp = pos.get('tp_price')
         sl = pos.get('sl_price')
-        if tp and last_price >= tp:
-            order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
-            print(f"🎯 [익절] {stock_code} {shares}주 @ {last_price} → {order_result}", flush=True)
-            log_trade(datetime.now(), stock_code, last_price, pos.get("p", 0), pos.get("R", 0), pos.get("fstar", 0), shares, "매도", order_result)
-            if order_result.get("rt_cd") == "0":
-                del portfolio[stock_code]
+        if tp and last >= tp:
+            res = send_order(code, last, qty=shares, order_type="매도")
+            print(f"🎯 [익절] {code} {shares}주 @ {last} → {res}", flush=True)
+            log_trade(datetime.now(), code, last, pos.get("p", 0), pos.get("R", 0), pos.get("fstar", 0), shares, "매도", res)
+            if res.get("rt_cd") == "0":
+                del portfolio[code]
                 continue
-        if sl and last_price <= sl:
-            order_result = send_order(stock_code, last_price, qty=shares, order_type="매도")
-            print(f"🛑 [손절] {stock_code} {shares}주 @ {last_price} → {order_result}", flush=True)
-            log_trade(datetime.now(), stock_code, last_price, pos.get("p", 0), pos.get("R", 0), pos.get("fstar", 0), shares, "매도", order_result)
-            if order_result.get("rt_cd") == "0":
-                del portfolio[stock_code]
+        if sl and last <= sl:
+            res = send_order(code, last, qty=shares, order_type="매도")
+            print(f"🛑 [손절] {code} {shares}주 @ {last} → {res}", flush=True)
+            log_trade(datetime.now(), code, last, pos.get("p", 0), pos.get("R", 0), pos.get("fstar", 0), shares, "매도", res)
+            if res.get("rt_cd") == "0":
+                del portfolio[code]
 
-# ───────────── 켈리 계산 ─────────────
+# ───────────── 켈리 ─────────────
 def extract_prob_from_row(row: dict) -> float:
-    """buy_list.csv 한 행에서 상승확률 p를 추출(다양한 컬럼명 지원). 0~1로 반환."""
     keys = ["prob_up", "p", "prob", "상승확률", "확률"]
     for k in row.keys():
-        lk = str(k).lower()
-        for cand in keys:
-            if lk == cand.lower():
-                val = row[k]
-                try:
-                    p = float(val)
-                    if p > 1.0:  # % 스케일
-                        p = p / 100.0
-                    return max(0.0, min(1.0, p))
-                except Exception:
-                    pass
-    return 0.55  # 기본값
+        if str(k).lower() in [x.lower() for x in keys]:
+            try:
+                p = float(row[k])
+                if p > 1.0:
+                    p = p / 100.0
+                return max(0.0, min(1.0, p))
+            except Exception:
+                pass
+    return 0.55
 
 def compute_kelly_fraction(p: float, R: float) -> float:
     q = 1.0 - p
     return p - (q / R)
 
-# ───────────── 메인 루프 ─────────────
+# ───────────── 메인 ─────────────
 if __name__ == "__main__":
-    print("📊 buy_list.csv에서 매수 후보 불러오는 중...", flush=True)
-
-    # buy_list.csv를 inserver/data/results 에서 찾음 (영문화 경로)
+    print("📊 buy_list.csv 로드 중…", flush=True)
     if not os.path.exists(BUYLIST_PATH):
-        print("❌ buy_list.csv 파일이 존재하지 않습니다.", flush=True)
-        print("   위치:", os.path.abspath(BUYLIST_PATH))
-        sys.exit(1)
+        print("❌ buy_list.csv 없음:", os.path.abspath(BUYLIST_PATH))
+        raise SystemExit(1)
 
-    # buy_list.csv 로드 (code/종목코드 모두 지원, 6자리 0패딩)
     df_cand = pd.read_csv(BUYLIST_PATH, dtype={'종목코드': str, 'code': str})
     rows = []
     for _, row in df_cand.iterrows():
@@ -462,27 +409,22 @@ if __name__ == "__main__":
             continue
         d['종목코드'] = code
         rows.append(d)
-
     if not rows:
-        print("❌ 유효한 후보가 없습니다.", flush=True)
-        sys.exit(1)
+        print("❌ 유효 후보 없음")
+        raise SystemExit(1)
 
     current_buy_codes = set([r['종목코드'] for r in rows])
-    print(f"✅ [get_today_candidates] 불러온 후보 수: {len(rows)}", flush=True)
+    print(f"✅ 후보 수: {len(rows)}", flush=True)
 
     loop_count = 1
     portfolio = load_portfolio()
-
-    # 평가금액(Equity Curve) 기록
-    equity_curve = []  # {time, total_value}
-    # 고정 손익비 (R = TAKE/STOP)
+    equity_curve = []
     R = TAKE_PROFIT_PCT / STOP_LOSS_PCT
 
     try:
         while True:
-            print(f"\n[LOOP {loop_count}] 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+            print(f"\n[LOOP {loop_count}] {datetime.now():%Y-%m-%d %H:%M:%S}", flush=True)
 
-            # 0) 비후보 정리 및 TP/SL 점검
             if SELL_NON_CANDIDATES:
                 wait_until_all_non_candidate_sold(portfolio, current_buy_codes)
                 save_portfolio(portfolio)
@@ -490,30 +432,27 @@ if __name__ == "__main__":
                 check_takeprofit_stoploss(portfolio)
                 save_portfolio(portfolio)
 
-            # 🔸 총자산 계산(예수금+보유평가) → f비율 배분에 사용
             if USE_FULL_EQUITY:
                 total_equity, cash, stock_eval = get_account_totals(portfolio)
                 effective_total_budget = int(total_equity * EQUITY_UTILIZATION)
                 if effective_total_budget <= 0:
-                    print("⚠️ 총자산이 0으로 인식되어 배분 불가. 다음 루프로 이동.", flush=True)
+                    print("⚠️ 총자산 0으로 인식 → skip", flush=True)
                     loop_count += 1
                     time.sleep(600)
                     continue
-                # 종목당 상한은 사실상 제거
                 effective_max_per_stock = float("inf")
-                print(f"💰 Total equity = {total_equity:,} / utilization={EQUITY_UTILIZATION*100:.0f}% → "
-                      f"budget={effective_total_budget:,}", flush=True)
+                print(f"💰 Total equity={total_equity:,} / utilization={EQUITY_UTILIZATION*100:.0f}% → budget={effective_total_budget:,}", flush=True)
             else:
                 effective_total_budget = int(TOTAL_BUY_BUDGET_ALL)
                 effective_max_per_stock = MAX_BUY_BUDGET
 
-            # 1) 각 후보 p, 현재가, f* 계산
+            # 후보별 p, f* 계산
             kelly_list = []
             for d in rows:
                 code = d['종목코드']
                 price = get_current_price(code)
                 if not price or price <= 0:
-                    print(f"❌ 현재가 조회 실패: {code}", flush=True)
+                    print(f"❌ 현재가 실패: {code}", flush=True)
                     continue
                 p = extract_prob_from_row(d)
                 fstar = compute_kelly_fraction(p, R)
@@ -524,33 +463,31 @@ if __name__ == "__main__":
                     'price': price,
                     'p': p,
                     'R': R,
-                    'fstar': fstar,
+                    'fstar': fstar
                 })
 
             if not kelly_list:
-                print("⚠️ 켈리 양수 종목이 없습니다. 다음 루프로 넘어갑니다.", flush=True)
+                print("⚠️ 양수 켈리 없음 → sleep", flush=True)
                 loop_count += 1
                 time.sleep(600)
                 continue
 
-            # 2) f* 합으로 비례 배분 (총예산 및 개별 캡)
+            # f* 비례 배분
             sum_f = sum(x['fstar'] for x in kelly_list)
             allocated_total = 0
             for x in sorted(kelly_list, key=lambda z: z['fstar'], reverse=True):
                 target_value = effective_total_budget * (x['fstar'] / sum_f)
-                target_value = min(target_value, effective_max_per_stock) if np.isfinite(effective_max_per_stock) else target_value
+                if np.isfinite(MAX_BUY_BUDGET):
+                    target_value = min(target_value, float('inf'))  # no cap when using full equity
                 if ENFORCE_TOTAL_BUDGET_CAP:
                     remain = effective_total_budget - allocated_total
-                    if remain <= 0:
-                        target_value = 0
-                    else:
-                        target_value = min(target_value, remain)
+                    target_value = 0 if remain <= 0 else min(target_value, remain)
                 qty_target = int(target_value // x['price'])
                 x['target_value'] = int(target_value)
-                x['target_qty']   = max(0, qty_target)
-                allocated_total  += x['target_value']
+                x['target_qty'] = max(0, qty_target)
+                allocated_total += x['target_value']
 
-            # 3) 리밸런싱 (증감 주문)
+            # 리밸런싱
             for x in kelly_list:
                 code = x['code']
                 price = x['price']
@@ -562,38 +499,38 @@ if __name__ == "__main__":
                 if target_qty > cur_qty:
                     add = target_qty - cur_qty
                     if add > 0:
-                        order_result = send_order(code, price, qty=add, order_type="매수")
-                        print(f"✅ BUY {code}: +{add} @ {price} → {order_result}", flush=True)
-                        log_trade(datetime.now(), code, price, p, R, fstar, add, "매수", order_result)
-                        if order_result.get("rt_cd") == "0":
+                        res = send_order(code, price, qty=add, order_type="매수")
+                        print(f"✅ BUY {code}: +{add} @{price} → {res}", flush=True)
+                        log_trade(datetime.now(), code, price, p, R, fstar, add, "매수", res)
+                        if res.get("rt_cd") == "0":
                             buy_price = price
-                            tp_price = adjust_price_to_tick(int(buy_price * (1 + TAKE_PROFIT_PCT)))
-                            sl_price = adjust_price_to_tick(int(buy_price * (1 - STOP_LOSS_PCT)))
+                            tp = adjust_price_to_tick(int(buy_price * (1 + TAKE_PROFIT_PCT)))
+                            sl = adjust_price_to_tick(int(buy_price * (1 - STOP_LOSS_PCT)))
                             if code in portfolio:
-                                portfolio[code]['qty']      += add
-                                portfolio[code]['tp_price']  = portfolio[code].get('tp_price', tp_price)
-                                portfolio[code]['sl_price']  = portfolio[code].get('sl_price', sl_price)
-                                portfolio[code]['p']         = p
-                                portfolio[code]['R']         = R
-                                portfolio[code]['fstar']     = fstar
+                                portfolio[code]['qty'] += add
+                                portfolio[code]['tp_price'] = portfolio[code].get('tp_price', tp)
+                                portfolio[code]['sl_price'] = portfolio[code].get('sl_price', sl)
+                                portfolio[code]['p'] = p
+                                portfolio[code]['R'] = R
+                                portfolio[code]['fstar'] = fstar
                             else:
                                 portfolio[code] = {
                                     'buy_price': buy_price,
                                     'qty': add,
-                                    'tp_price': tp_price,
-                                    'sl_price': sl_price,
+                                    'tp_price': tp,
+                                    'sl_price': sl,
                                     'p': p,
                                     'R': R,
-                                    'fstar': fstar,
+                                    'fstar': fstar
                                 }
 
                 elif target_qty < cur_qty:
                     sell = cur_qty - target_qty
                     if sell > 0:
-                        order_result = send_order(code, price, qty=sell, order_type="매도")
-                        print(f"↘️ SELL {code}: -{sell} @ {price} → {order_result}", flush=True)
-                        log_trade(datetime.now(), code, price, p, R, fstar, sell, "매도", order_result)
-                        if order_result.get("rt_cd") == "0":
+                        res = send_order(code, price, qty=sell, order_type="매도")
+                        print(f"↘️ SELL {code}: -{sell} @{price} → {res}", flush=True)
+                        log_trade(datetime.now(), code, price, p, R, fstar, sell, "매도", res)
+                        if res.get("rt_cd") == "0":
                             portfolio[code]['qty'] -= sell
                             if portfolio[code]['qty'] <= 0:
                                 del portfolio[code]
@@ -602,28 +539,28 @@ if __name__ == "__main__":
 
             save_portfolio(portfolio)
 
-            # 4) 평가금액 기록 & CSV 저장 (영문화 파일명)
+            # 평가금액 기록 & CSV 저장
             total_value = 0
             for code, pos in portfolio.items():
                 shares = int(pos.get('qty', 0))
                 if shares > 0:
-                    last_price = get_current_price(code)
-                    if last_price:
-                        total_value += shares * last_price
+                    last = get_current_price(code)
+                    if last:
+                        total_value += shares * last
 
             now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             equity_curve.append({"time": now_str, "total_value": int(total_value)})
-            pd.DataFrame(equity_curve).to_csv(Path(OUTPUT_DIR) / "equity_curve.csv", index=False, encoding='utf-8-sig')
+            pd.DataFrame(equity_curve).to_csv(Path(OUTPUT_DIR) / "equity_curve.csv",
+                                              index=False, encoding='utf-8-sig')
             print(f"[Loop {loop_count}] total value: {total_value:,.0f}", flush=True)
 
             loop_count += 1
-            time.sleep(600)  # 10분 간격
+            time.sleep(600)
 
     except KeyboardInterrupt:
         print("사용자 중단! 누적 수익률 그래프/CSV 저장 중...", flush=True)
 
     finally:
-        # 최종 Equity Curve CSV 재저장
         try:
             if len(equity_curve) > 0:
                 df_eq = pd.DataFrame(equity_curve)
@@ -633,7 +570,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"CSV 저장 중 오류: {e}", flush=True)
 
-        # 누적 수익률 그래프 저장 (영문화 파일명/라벨)
         try:
             if len(equity_curve) > 0:
                 plt.rcParams['axes.unicode_minus'] = False
