@@ -24,7 +24,7 @@ TEST_PERIOD_DAYS = 500
 SEQ_LEN = 5
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
-EPOCHS = 20
+EPOCHS = 50
 VAL_LOSS_THRESHOLD = 0.693
 PERCENT = 5
 
@@ -89,7 +89,7 @@ MINMAX_COLS = [
     'Open',
     'High',
     'Low',
-    'Volume',
+    'TradingValue',
 ]
 
 FEATURE_COLUMNS = STANDARD_COLS + MINMAX_COLS
@@ -117,6 +117,7 @@ def engineer_features(df):
     # --- 기본 정리 ---
     df['Close_RET'] = df['Close'].pct_change().fillna(0)
     df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce').fillna(0)
+    df['TradingValue'] = df['Close'] * df['Volume']
     
     # --- 거시 경제 변수 전처리 ---
     df[['KOSPI','KOSDAQ','USD_KRW']] = df[['KOSPI','KOSDAQ','USD_KRW']].ffill().fillna(0)
@@ -132,7 +133,7 @@ def engineer_features(df):
 
 # ------------------- 모델 정의 -------------------
 class StockModel(nn.Module):
-    def __init__(self, input_size, hidden_size=32, dropout=0.3):
+    def __init__(self, input_size, hidden_size=32, dropout=0.2):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -245,7 +246,7 @@ def train_model(df_train, code=None, conf_percentile=PERCENT):
     model = StockModel(input_size=X_seq.shape[2]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
 
     # 3) 학습 루프
     best_val_loss = float('inf')
