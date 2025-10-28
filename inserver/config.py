@@ -13,3 +13,5 @@ def get_account(name: str):
     if name not in ACCOUNTS:
         raise ValueError(f"등록되지 않은 계정: {name}")
     return ACCOUNTS[name]
+
+print(get_account("acc3"))

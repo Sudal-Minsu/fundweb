@@ -40,7 +40,7 @@ SL_PCT      = 0.02
 HORIZON     = 6
 COMMISSION = 0.003         # 왕복 수수료 (0.3%)
 ROLL_NORM = 60             # 롤링 Z-정규화 윈도우
-VAL_SPLIT_DAYS = 60        # 최근 60영업일은 테스트/백테스트 구간
+VAL_SPLIT_DAYS = 30        # 최근 60영업일은 테스트/백테스트 구간
 SEED = 42                  # 랜덤 시드 (재현성)
 random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
 device = torch.device("cpu")  # 실행 디바이스 (CPU 고정)
