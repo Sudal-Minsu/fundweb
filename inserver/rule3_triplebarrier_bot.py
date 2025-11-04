@@ -462,7 +462,7 @@ def get_auth_info():
                 return cache["app_key"], cache["app_secret"], cache["token"]
         except Exception as e:
             print("⚠️ 캐시 파일 읽기 실패:", e)
-    app_key, app_secret = APP_KEY, APP_SECRET
+    app_key, app_secret = get_api_keys()
     access_token = get_access_token(app_key, app_secret)
     cache = {"token": access_token, "timestamp": time.time(),
              "app_key": app_key, "app_secret": app_secret}
