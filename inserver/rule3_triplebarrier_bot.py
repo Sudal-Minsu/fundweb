@@ -29,12 +29,12 @@ DB_CONFIG = {"host": "127.0.0.1",
 
 # 계좌 정보 저장
 ACCOUNT_INFO = {
-    "CANO": "50150860",  # 계좌번호 앞 8지리
+    "CANO": "50156249",  # 계좌번호 앞 8지리
     "ACNT_PRDT_CD": "01",  # 계좌번호 뒤 2자리
 }
 
-keyring.set_password('mock_app_key', '고민수', 'PSXtsebcvZLq1ZKGsppEYYxCd0RoOd48INlF')
-keyring.set_password('mock_app_secret', '고민수', 'pnPjHI+nULtuBz3jTzPhvBQY+9VKfMCql6lN3btyp19EGhi1hALeHrPjhsFj016eaGqACCcDWdZ3ivhNOIVhBZRATrHdiTk8L8uCxVNQn3qpWSk+54SQ/XMCyJvVpUSaPiRBf+n0iSu7blyUjBxQgt9zBMUvBB23ylyMg8yrWCDJZpgQXM4=')
+keyring.set_password('mock_app_key', '고민수', 'PSYoLcVh9J1P6c7kOGfQlasCL66dG2iy3kky')
+keyring.set_password('mock_app_secret', '고민수', '/6Ur3JrcY1rjljdcXAtmukAqnXlhu+hPgbkIwfllhTzJ0/FPrJ3Lih8/v5hotpbJNzXbYHr3jFvnGy1mq9QgaTD+5Hf5MCUKAY9Z/8gVFjfk2uc3o/d+ixKU8uE35Tu2B6JR3FuwYh4U42+MkrbvVWKMJ7+DYpfgGA9l5wESVspGi9h3Vyo=')
 
 def get_api_keys():
     """저장된 API 키를 불러오는 함수"""
