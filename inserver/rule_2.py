@@ -1,12 +1,26 @@
 import os
 import random
 import platform
+
+# 병렬 환경의 비결정성/스레드 폭주 방지 (선설정)
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+# CuBLAS 결정론 요구 환경변수 (CUDA에서 torch.use_deterministic_algorithms(True) 쓸 때 필수)
+# 셸에서 안 넣어줘도 코드가 자체 설정하도록 보장
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+# ----------------------------------------------------
+# 여기까지가 환경변수/OS 레벨 설정. 이제부터 일반 임포트 진행
+# ----------------------------------------------------
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from tqdm import tqdm
 from sqlalchemy import create_engine
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -20,7 +34,7 @@ from config import DB_CONFIG
 # ------------------- 설정 -------------------
 TRAIN_YEARS = 10
 BACKTEST_START_DATE = pd.to_datetime("2024-07-01")
-TEST_PERIOD_DAYS = 500
+TEST_PERIOD_DAYS = 5
 SEQ_LEN = 5
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
@@ -52,12 +66,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # inserver
 OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results") # inserver/data/results
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 병렬 환경의 비결정성 방지
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-
 # PyTorch 결정적 알고리즘 사용
 torch.use_deterministic_algorithms(True)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # 종목 코드별로 항상 같은 시드를 생성하기 위한 해시 기반 시드 함수
 def code_to_seed(code: str, base=42):
