@@ -15,9 +15,7 @@ from datetime import time as dtime
 from typing import Optional, Tuple, Dict
 import logging, os, json
 from logging.handlers import RotatingFileHandler
-
 import json
-import keyring
 
 # MySQL 연결 설정
 DB_CONFIG = {"host": "127.0.0.1", 
@@ -33,13 +31,11 @@ ACCOUNT_INFO = {
     "ACNT_PRDT_CD": "01",  # 계좌번호 뒤 2자리
 }
 
-keyring.set_password('mock_app_key', '고민수', 'PSYoLcVh9J1P6c7kOGfQlasCL66dG2iy3kky')
-keyring.set_password('mock_app_secret', '고민수', '/6Ur3JrcY1rjljdcXAtmukAqnXlhu+hPgbkIwfllhTzJ0/FPrJ3Lih8/v5hotpbJNzXbYHr3jFvnGy1mq9QgaTD+5Hf5MCUKAY9Z/8gVFjfk2uc3o/d+ixKU8uE35Tu2B6JR3FuwYh4U42+MkrbvVWKMJ7+DYpfgGA9l5wESVspGi9h3Vyo=')
 
 def get_api_keys():
     """저장된 API 키를 불러오는 함수"""
-    app_key = keyring.get_password('mock_app_key', '고민수')
-    app_secret = keyring.get_password('mock_app_secret', '고민수')
+    app_key = 'PSYoLcVh9J1P6c7kOGfQlasCL66dG2iy3kky'
+    app_secret = '/6Ur3JrcY1rjljdcXAtmukAqnXlhu+hPgbkIwfllhTzJ0/FPrJ3Lih8/v5hotpbJNzXbYHr3jFvnGy1mq9QgaTD+5Hf5MCUKAY9Z/8gVFjfk2uc3o/d+ixKU8uE35Tu2B6JR3FuwYh4U42+MkrbvVWKMJ7+DYpfgGA9l5wESVspGi9h3Vyo='
     print("app_key:", app_key)
     print("app_secret:", app_secret)
     return app_key, app_secret
