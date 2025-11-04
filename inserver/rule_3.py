@@ -16,12 +16,15 @@ import json
 
 
 # MySQL 연결 설정
-DB_CONFIG = {"host": "127.0.0.1", 
-             "user": "stockuser", 
-             "password": "stockpass123!", 
-             "port": 3306, 
-             "database": "news_db", 
-             "charset": "utf8mb4", }
+DB_CONFIG = {    
+    "host": "127.0.0.1",
+    "user": "visitor",
+    "password": "1234567890",
+    "port": 3306,
+    "database": "news_db",
+    "charset": "utf8mb4"
+}
+
 
 # 계좌 정보 저장
 ACCOUNT_INFO = {
