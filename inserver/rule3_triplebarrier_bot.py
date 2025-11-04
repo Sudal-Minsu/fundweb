@@ -106,13 +106,10 @@ K_MAX       = 4      # 동시 보유 종목 수(슬롯 수)
 HORIZON     = 6      # 보유 기간(영업일)
 
 # ========== 인증/계좌 (VTS) ==========
-account = get_account("acc4")
-APP_KEY     = account["APP_KEY"]
-APP_SECRET  = account["APP_SECRET"]
-ACCOUNT_INFO = account["ACCOUNT_INFO"]
 CANO          = ACCOUNT_INFO['CANO']
 ACNT_PRDT_CD  = ACCOUNT_INFO["ACNT_PRDT_CD"]
 BASE_URL      = "https://openapivts.koreainvestment.com:29443"  # VTS 서버
+
 
 # ========== 공통 유틸 ==========
 def _safe_append_row(df: pd.DataFrame, row: dict) -> pd.DataFrame:
