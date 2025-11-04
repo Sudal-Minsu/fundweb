@@ -85,7 +85,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
-    
+
+# GPU일 때는 병렬 끄기 (OOM/느려짐 방지)
+if device.type == 'cuda':
+    N_CORE = 1
 # ------------------- 피처 정의 -------------------
 STANDARD_COLS = [
     # 변화량
