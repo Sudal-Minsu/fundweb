@@ -36,12 +36,17 @@ PORTFOLIO_PATH = os.path.join(BASE_DIR, "portfolio.json")
 #                   ACCOUNT_INFO = {"CANO": "...", "ACNT_PRDT_CD": "..."}
 # ─────────────────────────────
 try:
-    from config import get_api_keys, ACCOUNT_INFO
+    from config import get_account
 except Exception as e:
-    print("❌ Failed to import inserver/config_local.py (must exist and define get_api_keys, ACCOUNT_INFO)")
-    print("   e.g., see the sample provided earlier with secrets.json")
+    print("❌ Failed to import config.get_account()")
     print(f"Error: {e}")
     raise SystemExit(1)
+
+ACCOUNT_NAME = "acc2"
+account = get_account(ACCOUNT_NAME)
+app_key = account["APP_KEY"]
+app_secret = account["APP_SECRET"]
+ACCOUNT_INFO = account["ACCOUNT_INFO"]
 
 # ─────────────────────────────
 # Strategy params
@@ -76,7 +81,9 @@ def adjust_price_to_tick(price: int) -> int:
     return int(price - (price % tick))
 
 def issue_access_token():
-    app_key, app_secret = get_api_keys()
+    if not app_key or not app_secret:
+        print("❌ APP KEY/SECRET is empty")
+        raise SystemExit(1)
     if not app_key or not app_secret:
         print("❌ Empty app_key/app_secret from config_local.get_api_keys()")
         raise SystemExit(1)
@@ -92,13 +99,13 @@ def issue_access_token():
     try:
         j = res.json()
     except Exception:
-        print("❌ Token response JSON parse failed:", res.text)
+        print("Token response JSON parse failed:", res.text)
         raise SystemExit(1)
     token = j.get("access_token", "")
     if not token:
-        print("❌ Failed to issue access token:", j)
+        print("Failed to issue access token:", j)
         raise SystemExit(1)
-    print("🔐 Access token issued", flush=True)
+    print("Access token issued", flush=True)
     return token, app_key, app_secret
 
 access_token, app_key, app_secret = issue_access_token()

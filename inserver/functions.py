@@ -5,7 +5,7 @@ import random
 import time
 from datetime import datetime, date
 import matplotlib.pyplot as plt
-from config_ko import DB_CONFIG, ACCOUNT_INFO
+from config import DB_CONFIG, get_account
 import keyring
 import os, datetime as dt
 import pandas as pd
@@ -13,12 +13,13 @@ import csv
 
 
 def get_api_keys():
-    """저장된 API 키를 불러오는 함수"""
-    app_key = keyring.get_password('mock_app_key', '고민수')
-    app_secret = keyring.get_password('mock_app_secret', '고민수')
-    print("app_key:", app_key)
-    print("app_secret:", app_secret)
-    return app_key, app_secret
+    return APP_KEY, APP_SECRET
+
+ACCOUNT_NAME = "acc3"
+account = get_account(ACCOUNT_NAME)
+ACCOUNT_INFO = account["ACCOUNT_INFO"]
+APP_KEY = account["APP_KEY"]
+APP_SECRET = account["APP_SECRET"]
 
 # 🔹 접근토큰 발급
 def get_access_token(app_key, app_secret):
@@ -183,7 +184,7 @@ def execute_order(app_key, app_secret, access_token, stock_code, quantity, order
         return None
 
 
-def check_account(app_key, app_secret, access_token):
+def check_account(app_key=None, app_secret=None, access_token=None):
     output1 = []
     output2 = []
     CTX_AREA_NK100 = ''

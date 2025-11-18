@@ -14,4 +14,7 @@ def get_account(name: str):
         raise ValueError(f"등록되지 않은 계정: {name}")
     return ACCOUNTS[name]
 
-print(get_account("acc3"))
+
+# acc1: Choi
+# acc2: Jin
+# acc3: Ko
