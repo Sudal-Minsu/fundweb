@@ -8,24 +8,107 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <style>
-    html, body { margin: 0; font-family: Arial, sans-serif; background-color: #3a3a3a; color: white; overflow-x: auto; width: 100%; }
-    nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 24px; background-color: #ffffff; border-bottom: 1px solid #ccc; white-space: nowrap; }
-    .nav-left { display: flex; align-items: center; }
-    .nav-left img { height: 32px; margin-right: 10px; }
-    .nav-left a { font-size: 24px; font-family: 'DM Serif Display', serif; color: black; text-decoration: none; letter-spacing: 3px; white-space: nowrap; }
-    .nav-links { display: flex; flex-wrap: nowrap; gap: 8px; }
-    .nav-links a { padding: 6px 12px; text-decoration: none; color: black; font-size: 13px; border-radius: 4px; background-color: #d9d9d9; transition: background-color 0.2s; white-space: nowrap; }
-    .nav-links a:hover, .nav-links a.active { background-color: #c0c0c0; }
-    .home-button { background-color: #52545a !important; color: white !important; }
-    .home-button:hover { background-color: white !important; color: #52545a !important; }
-    .main { padding: 40px 60px; background-color: #3a3a3a; color: white; min-height: 600px; }
-    .chart-wrap { max-width: 1200px; margin: 0 auto 32px; }
-    .chart-card { background: #2f2f2f; border: 1px solid #555; border-radius: 8px; padding: 16px; }
-    .chart-card h3 { margin: 0 0 12px; font-weight: 600; font-size: 18px; color: #e8e8e8; }
-    canvas { width: 100% !important; }
-    table { border-collapse: collapse; margin: 0 auto 40px auto; font-size: 16px; text-align: center; width: 100%; max-width: 1200px; }
-    th, td { border: 1px solid #888; padding: 10px; }
-    th { background-color: #555; color: white; }
+    html, body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #3a3a3a;
+      color: white;
+      overflow-x: auto;
+      width: 100%;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 24px;
+      background-color: #ffffff;
+      border-bottom: 1px solid #ccc;
+      white-space: nowrap;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+    }
+    .nav-left img {
+      height: 32px;
+      margin-right: 10px;
+    }
+    .nav-left a {
+      font-size: 24px;
+      font-family: 'DM Serif Display', serif;
+      color: black;
+      text-decoration: none;
+      letter-spacing: 3px;
+      white-space: nowrap;
+    }
+    .nav-links {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+    }
+    .nav-links a {
+      padding: 6px 12px;
+      text-decoration: none;
+      color: black;
+      font-size: 13px;
+      border-radius: 4px;
+      background-color: #d9d9d9;
+      transition: background-color 0.2s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover,
+    .nav-links a.active {
+      background-color: #c0c0c0;
+    }
+    .home-button {
+      background-color: #52545a !important;
+      color: white !important;
+    }
+    .home-button:hover {
+      background-color: white !important;
+      color: #52545a !important;
+    }
+    .main {
+      padding: 40px 60px;
+      background-color: #3a3a3a;
+      color: white;
+      min-height: 600px;
+    }
+    .chart-wrap {
+      max-width: 1200px;
+      margin: 0 auto 32px;
+    }
+    .chart-card {
+      background: #2f2f2f;
+      border: 1px solid #555;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .chart-card h3 {
+      margin: 0 0 12px;
+      font-weight: 600;
+      font-size: 18px;
+      color: #e8e8e8;
+    }
+    canvas {
+      width: 100% !important;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 0 auto 40px auto;
+      font-size: 16px;
+      text-align: center;
+      width: 100%;
+      max-width: 1200px;
+    }
+    th, td {
+      border: 1px solid #888;
+      padding: 10px;
+    }
+    th {
+      background-color: #555;
+      color: white;
+    }
   </style>
 </head>
 <body>
@@ -43,6 +126,7 @@
       <a href="/ranking" class="active">Ranking</a>
     </div>
   </nav>
+
   <div class="main">
     <h2 class="one-title">◈ 총 평가금액</h2>
     <div class="chart-wrap">
@@ -76,9 +160,10 @@
   </div>
 
   <script>
-    const FILE_RULE1 = "/data/results/평가자료.csv";
-    const FILE_RULE2 = "/data/results/equity_curve.csv";
-    const FILE_RULE3 = "/data/results/equity_log.csv";
+    // CSV 경로: inserver/data/results/*.csv 를 웹에서 /data/results/*.csv 로 서빙
+    const FILE_RULE1 = "/data/results/eval.csv";          // from trading.py
+    const FILE_RULE2 = "/data/results/equity_curve.csv";  // from full_kelly.py
+    const FILE_RULE3 = "/data/results/equity_log.csv";    // from rule3_triplebarrier_bot.py
 
     const tickColor = "#e8e8e8";
     const gridColor = "#555";
@@ -89,6 +174,7 @@
       return parseFloat(String(x).replace(/[,_%\s]/g, "").replace(/_/g, ""));
     }
 
+    // trading.py → eval.csv
     function parseRule1(rows) {
       return rows.map(r => {
         const d = r["date"];
@@ -101,6 +187,7 @@
       }).filter(Boolean).sort((a, b) => a.x - b.x);
     }
 
+    // full_kelly.py → equity_curve.csv
     function parseRule2(rows) {
       return rows.map(r => {
         const ts = r["time"];
@@ -111,6 +198,7 @@
       }).filter(Boolean).sort((a, b) => a.x - b.x);
     }
 
+    // rule3_triplebarrier_bot.py → equity_log.csv
     function parseRule3(rows) {
       return rows.map(r => {
         const ts = r["ts"];
@@ -123,7 +211,13 @@
 
     function loadCSV(url) {
       return new Promise((resolve, reject) => {
-        Papa.parse(url, { download: true, header: true, skipEmptyLines: true, complete: res => resolve(res.data), error: reject });
+        Papa.parse(url, {
+          download: true,
+          header: true,
+          skipEmptyLines: true,
+          complete: res => resolve(res.data),
+          error: reject
+        });
       });
     }
 
@@ -160,35 +254,96 @@
         responsive: true,
         maintainAspectRatio: true,
         aspectRatio: 2,
-        plugins: { legend: { labels: { color: tickColor } } },
+        plugins: {
+          legend: {
+            labels: { color: tickColor }
+          }
+        },
         scales: {
-          x: { type: "time", ticks: { color: tickColor }, grid: { color: gridColor } },
-          y: { ticks: { color: tickColor }, grid: { color: gridColor } }
+          x: {
+            type: "time",
+            ticks: { color: tickColor },
+            grid: { color: gridColor }
+          },
+          y: {
+            ticks: { color: tickColor },
+            grid: { color: gridColor }
+          }
         }
       };
 
+      // ① 총 평가금액 그래프
       new Chart(ctx1, {
         type: "line",
         data: {
           datasets: [
-            { label: "Choi", data: r1.map(d => ({ x: d.x, y: d.equity })), borderColor: "#66BB6A", backgroundColor: "#66BB6A", borderWidth: 2, tension: 0.2 },
-            { label: "Jin", data: r2.map(d => ({ x: d.x, y: d.equity })), borderColor: "#BA68C8", backgroundColor: "#BA68C8", borderWidth: 2, tension: 0.2 },
-            { label: "Ko", data: r3.map(d => ({ x: d.x, y: d.equity })), borderColor: "#FFB74D", backgroundColor: "#FFB74D", borderWidth: 2, tension: 0.2 }
+            {
+              label: "Choi",
+              data: r1.map(d => ({ x: d.x, y: d.equity })),
+              borderColor: "#66BB6A",
+              backgroundColor: "#66BB6A",
+              borderWidth: 2,
+              tension: 0.2
+            },
+            {
+              label: "Jin",
+              data: r2.map(d => ({ x: d.x, y: d.equity })),
+              borderColor: "#BA68C8",
+              backgroundColor: "#BA68C8",
+              borderWidth: 2,
+              tension: 0.2
+            },
+            {
+              label: "Ko",
+              data: r3.map(d => ({ x: d.x, y: d.equity })),
+              borderColor: "#FFB74D",
+              backgroundColor: "#FFB74D",
+              borderWidth: 2,
+              tension: 0.2
+            }
           ]
         },
         options: commonOptions
       });
 
+      // ② 누적수익률 그래프 (여기서 y는 equity가 아니라 cumPct!)
       const returnOptions = JSON.parse(JSON.stringify(commonOptions));
-      returnOptions.scales.y = { ticks: { color: tickColor, callback: v => `${v}%` }, grid: { color: gridColor } };
+      returnOptions.scales.y = {
+        ticks: {
+          color: tickColor,
+          callback: v => `${v}%`
+        },
+        grid: { color: gridColor }
+      };
 
       new Chart(ctx2, {
         type: "line",
         data: {
           datasets: [
-            { label: "Choi", data: r1.map(d => ({ x: d.x, y: d.equity })), borderColor: "#66BB6A", backgroundColor: "#66BB6A", borderWidth: 2, tension: 0.2 },
-            { label: "Jin", data: r2.map(d => ({ x: d.x, y: d.equity })), borderColor: "#BA68C8", backgroundColor: "#BA68C8", borderWidth: 2, tension: 0.2 },
-            { label: "Ko", data: r3.map(d => ({ x: d.x, y: d.equity })), borderColor: "#FFB74D", backgroundColor: "#FFB74D", borderWidth: 2, tension: 0.2 }
+            {
+              label: "Choi",
+              data: r1.map(d => ({ x: d.x, y: d.cumPct })),
+              borderColor: "#66BB6A",
+              backgroundColor: "#66BB6A",
+              borderWidth: 2,
+              tension: 0.2
+            },
+            {
+              label: "Jin",
+              data: r2.map(d => ({ x: d.x, y: d.cumPct })),
+              borderColor: "#BA68C8",
+              backgroundColor: "#BA68C8",
+              borderWidth: 2,
+              tension: 0.2
+            },
+            {
+              label: "Ko",
+              data: r3.map(d => ({ x: d.x, y: d.cumPct })),
+              borderColor: "#FFB74D",
+              backgroundColor: "#FFB74D",
+              borderWidth: 2,
+              tension: 0.2
+            }
           ]
         },
         options: returnOptions
@@ -198,8 +353,8 @@
     function buildRanking(r1, r2, r3) {
       const latest = [
         { label: "Choi", last: lastValid(r1, "cumPct") },
-        { label: "Jin", last: lastValid(r2, "cumPct") },
-        { label: "Ko", last: lastValid(r3, "cumPct") }
+        { label: "Jin",  last: lastValid(r2, "cumPct") },
+        { label: "Ko",   last: lastValid(r3, "cumPct") }
       ].map(d => ({
         label: d.label,
         cumPct: d.last ? d.last.cumPct : NaN,
@@ -207,7 +362,10 @@
         ts: d.last ? d.last.x : NaN
       }));
 
-      latest.sort((a, b) => (isNaN(b.cumPct) ? -Infinity : b.cumPct) - (isNaN(a.cumPct) ? -Infinity : a.cumPct));
+      latest.sort((a, b) =>
+        (isNaN(b.cumPct) ? -Infinity : b.cumPct) -
+        (isNaN(a.cumPct) ? -Infinity : a.cumPct)
+      );
 
       const tbody = document.querySelector("#rankingTable tbody");
       tbody.innerHTML = "";
@@ -223,7 +381,11 @@
       });
     }
 
-    Promise.all([loadCSV(FILE_RULE1), loadCSV(FILE_RULE2), loadCSV(FILE_RULE3)])
+    Promise.all([
+      loadCSV(FILE_RULE1),
+      loadCSV(FILE_RULE2),
+      loadCSV(FILE_RULE3)
+    ])
       .then(([r1raw, r2raw, r3raw]) => {
         const r1 = parseRule1(r1raw);
         const r2 = parseRule2(r2raw);
@@ -232,7 +394,8 @@
         buildRanking(r1, r2, r3);
       })
       .catch(() => {
-        document.querySelector("#rankingTable tbody").innerHTML = '<tr><td colspan="5">데이터를 불러올 수 없습니다</td></tr>';
+        document.querySelector("#rankingTable tbody").innerHTML =
+          '<tr><td colspan="5">데이터를 불러올 수 없습니다</td></tr>';
       });
   </script>
 </body>

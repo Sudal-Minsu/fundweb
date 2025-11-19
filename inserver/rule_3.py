@@ -14,6 +14,9 @@ warnings.filterwarnings("ignore")
 
 import json
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # MySQL 연결 설정
 DB_CONFIG = {    
@@ -378,23 +381,22 @@ def main():
     picks = select_today_recos(pred_df, code2df, k=K_MAX, p_thr=P_THRESHOLD)
 
     # 저장 & 프린트
-    os.makedirs('results_3', exist_ok=True)
-    pred_df.to_csv('results_3/preds.csv', index=False)
-    picks.to_csv('results_3/today_recos.csv', index=False)
+    preds_path = os.path.join(OUTPUT_DIR, "preds.csv")
+    today_recos_path = os.path.join(OUTPUT_DIR, "today_recos.csv")
+    pred_df.to_csv(preds_path, index=False)
+    picks.to_csv(today_recos_path, index=False)
 
     if picks.empty:
         print("[TODAY] 오늘자 추천이 없습니다. (데이터 최신 여부 확인)")
     else:
         print("\n[TODAY] 추천 종목 (상위 K)")
-        # 보기 좋은 출력
         view = picks[['code','p','score','entry_date','entry_px']].copy()
-        # 소수 자리 정리
-        view['p'] = (view['p']*100).round(2)  # %
+        view['p'] = (view['p']*100).round(2)
         view['score'] = view['score'].round(4)
         view['entry_px'] = view['entry_px'].round(2)
-        # 프린트
         print(view.to_string(index=False))
-        print("\n[SAVE] results_3/today_recos.csv")
+        print(f"\n[SAVE] {today_recos_path}")
+
 
     print(f"[DEBUG] preds entry_date range: {pred_df['entry_date'].min().date()} ~ {pred_df['entry_date'].max().date()}")
     print(f"[DEBUG] DB last date (참고): {max(dp['Date'].max() for dp in code2df.values() if len(dp)).date()}")

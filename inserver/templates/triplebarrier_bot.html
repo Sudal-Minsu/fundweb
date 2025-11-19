@@ -131,12 +131,6 @@
       letter-spacing: 1px;
       text-align: center;
     }
-    .matrix-title { 
-      font-size: 20px;
-      margin: 8px 0;
-      cursor: pointer;
-      text-align: left;
-    }
     .matrix-table {
       width: 100%;
       border-collapse: collapse;
@@ -167,14 +161,12 @@
     .matrix-table tbody tr:hover td { 
       filter: brightness(1.2);
     }
-    .section-spacer { 
-      height: 100px;
-    }
     .chart-card { 
       border: 1px solid #888; 
       border-radius: 6px; 
       padding: 12px; 
       background: #2f2f2f; 
+      height: 400px;
     }
   </style>
 </head>
@@ -232,6 +224,8 @@
     </div>
   </div>
 <script>
+  const START_CAPITAL = 100000000;
+
   const headerMap = {
     ts: "시간",
     positions_value: "보유 금액",
@@ -253,70 +247,163 @@
     tp_px: "익절가",
     sl_px: "손절가",
     cash_after: "체결 후 잔고"
-  }
-  const noFormatCols = ["code", "종목코드", "odno"]
+  };
+  const noFormatCols = ["code", "종목코드", "odno"];
 
   function toggleAccordion(element) {
-    let panel = element.nextElementSibling
+    let panel = element.nextElementSibling;
     if (panel.style.display === "block") {
-      panel.style.display = "none"
-      element.classList.remove("active")
+      panel.style.display = "none";
+      element.classList.remove("active");
     } else {
-      panel.style.display = "block"
-      element.classList.add("active")
+      panel.style.display = "block";
+      element.classList.add("active");
     }
   }
 
-  function loadCardData() {
-    Papa.parse("/data/results/equity_log.csv", {
+  function loadCardAndCharts() {
+    // 계좌 로그: results/account_log.csv (functions.py의 log_account)
+    Papa.parse("/results/account_log.csv", {
       download: true,
       header: true,
       complete: function(results) {
-        let rows = results.data.filter(r => r.ts && r.equity)
-        if (rows.length === 0) return
-        let lastRow = rows[rows.length - 1]
+        let rows = results.data.filter(r => r["날짜"] && r["총평가금액"]);
+        if (rows.length === 0) return;
 
-        let equity = parseFloat((lastRow["equity"] || "0").replace(/[_ ,]/g,""))
-        let cumReturn = parseFloat((lastRow["cum_return"] || "0").replace(/[_ ,]/g,"")) * 100
+        rows = rows.filter(r => Object.values(r).some(v => v !== ""));
+        if (rows.length === 0) return;
+
+        let labels = [];
+        let equityArr = [];
+        let cumReturnArr = [];
+
+        rows.forEach(row => {
+          let dateStr = (row["날짜"] || "").substring(5);
+          labels.push(dateStr);
+          let equityVal = parseFloat((row["총평가금액"] || "0").replace(/[_ ,]/g,""));
+          if (isNaN(equityVal)) equityVal = 0;
+          equityArr.push(equityVal);
+          let cumRetPct = (equityVal / START_CAPITAL - 1) * 100;
+          cumReturnArr.push(cumRetPct);
+        });
+
+        let lastRow = rows[rows.length - 1];
+        let equity = parseFloat((lastRow["총평가금액"] || "0").replace(/[_ ,]/g,""));
+        if (isNaN(equity)) equity = 0;
+        let cumReturn = (equity / START_CAPITAL - 1) * 100;
+
+        let today = new Date().toISOString().slice(0, 10);
+        let todayRows = rows.filter(r => (r["날짜"] || "").startsWith(today));
+        let todayPnL = 0;
+        if (todayRows.length > 0) {
+          let first = todayRows[0];
+          let last = todayRows[todayRows.length - 1];
+          let firstPnl = parseFloat((first["평가손익"] || "0").replace(/[_ ,]/g,""));
+          let lastPnl = parseFloat((last["평가손익"] || "0").replace(/[_ ,]/g,""));
+          if (!isNaN(firstPnl) && !isNaN(lastPnl)) {
+            todayPnL = lastPnl - firstPnl;
+          }
+        }
 
         document.getElementById("card-equity").querySelector("span").textContent =
-          new Intl.NumberFormat("ko-KR").format(equity)
+          new Intl.NumberFormat("ko-KR").format(equity);
         document.getElementById("card-return").querySelector("span").textContent =
-          cumReturn.toFixed(2) + "%"
-      }
-    })
+          cumReturn.toFixed(2) + "%";
+        document.getElementById("card-todaypnl").querySelector("span").textContent =
+          new Intl.NumberFormat("ko-KR").format(todayPnL);
 
-    Papa.parse("/data/results/trades_log.csv", {
+        const ctx1 = document.getElementById("equityChart").getContext("2d");
+        if (window.equityChart && typeof window.equityChart.destroy === "function") window.equityChart.destroy();
+        window.equityChart = new Chart(ctx1, {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: "총 평가금액",
+              data: equityArr,
+              borderWidth: 2,
+              borderColor: "#40e0d0",
+              backgroundColor: "rgba(154,196,255,0.15)",
+              pointRadius: 2,
+              tension: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { grid: { color: "#555" }, ticks: { display: false } },
+              y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => new Intl.NumberFormat("ko-KR").format(v) } }
+            },
+            plugins: { legend: { labels: { color: "#e0e0e0" } } }
+          }
+        });
+
+        const ctx2 = document.getElementById("cumReturnChart").getContext("2d");
+        if (window.cumReturnChart && typeof window.cumReturnChart.destroy === "function") window.cumReturnChart.destroy();
+        window.cumReturnChart = new Chart(ctx2, {
+          type: "line",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: "누적수익률 (%)",
+              data: cumReturnArr,
+              borderWidth: 2,
+              borderColor: "#ff9800",
+              backgroundColor: "rgba(255, 193, 7, 0.15)",
+              pointRadius: 2,
+              tension: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: { grid: { color: "#555" }, ticks: { display: false } },
+              y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => v.toFixed(2) + "%" } }
+            },
+            plugins: { legend: { labels: { color: "#e0e0e0" } } }
+          }
+        });
+      }
+    });
+
+    // 있으면 오늘 손익 계산에 trades_log도 한 번 더 반영 (없으면 그냥 무시됨)
+    Papa.parse("/results/trades_log.csv", {
       download: true,
       header: true,
       complete: function(results) {
-        let today = new Date().toISOString().slice(0, 10)
-        let todayPnL = 0
-        let positions = {}
+        if (!results.data || results.data.length === 0) return;
+
+        let today = new Date().toISOString().slice(0, 10);
+        let todayPnL = 0;
+        let positions = {};
 
         results.data.forEach(row => {
-          if (!row || Object.values(row).every(v => v === "")) return
+          if (!row || Object.values(row).every(v => v === "")) return;
           if (row.ts && row.ts.startsWith(today)) {
-            let side = row.side
-            let code = row.code
-            let qty = parseFloat((row.qty || "0").replace(/[_ ,]/g,""))
-            let price = parseFloat((row.price || "0").replace(/[_ ,]/g,""))
+            let side = row.side;
+            let code = row.code;
+            let qty = parseFloat((row.qty || "0").replace(/[_ ,]/g,""));
+            let price = parseFloat((row.price || "0").replace(/[_ ,]/g,""));
 
             if (side === "BUY") {
-              positions[code] = { qty: qty, price: price }
+              positions[code] = { qty: qty, price: price };
             } else if (side === "SELL" && positions[code]) {
-              let entry = positions[code]
-              let pnl = (price - entry.price) * qty
-              todayPnL += pnl
-              delete positions[code]
+              let entry = positions[code];
+              let pnl = (price - entry.price) * qty;
+              todayPnL += pnl;
+              delete positions[code];
             }
           }
-        })
+        });
 
-        document.getElementById("card-todaypnl").querySelector("span").textContent =
-          new Intl.NumberFormat("ko-KR").format(todayPnL)
+        if (!isNaN(todayPnL) && todayPnL !== 0) {
+          document.getElementById("card-todaypnl").querySelector("span").textContent =
+            new Intl.NumberFormat("ko-KR").format(todayPnL);
+        }
       }
-    })
+    });
   }
 
   function loadCSVtoTable(csvPath, tableId, withPnL=false, limitRows=null) {
@@ -324,177 +411,86 @@
       download: true,
       header: true,
       complete: function(results) {
-        let table = document.getElementById(tableId)
-        let thead = table.querySelector("thead")
-        let tbody = table.querySelector("tbody")
-        thead.innerHTML = ""
-        tbody.innerHTML = ""
-        if (results.data.length === 0) return
-        let headerRow = document.createElement("tr")
+        let table = document.getElementById(tableId);
+        let thead = table.querySelector("thead");
+        let tbody = table.querySelector("tbody");
+        thead.innerHTML = "";
+        tbody.innerHTML = "";
+        if (!results.data || results.data.length === 0) return;
+
+        let headerRow = document.createElement("tr");
         Object.keys(results.data[0]).forEach(col => {
-          let th = document.createElement("th")
-          th.textContent = headerMap[col] || col
-          headerRow.appendChild(th)
-        })
+          let th = document.createElement("th");
+          th.textContent = headerMap[col] || col;
+          headerRow.appendChild(th);
+        });
         if (withPnL) {
-          let th = document.createElement("th")
-          th.textContent = "손익"
-          headerRow.appendChild(th)
+          let th = document.createElement("th");
+          th.textContent = "손익";
+          headerRow.appendChild(th);
         }
-        thead.appendChild(headerRow)
-        let rows = limitRows ? results.data.slice(0, limitRows) : results.data
+        thead.appendChild(headerRow);
+
+        let rows = limitRows ? results.data.slice(0, limitRows) : results.data;
         rows.forEach(row => {
-          if (!row || Object.values(row).every(v => v === "")) return
-          let tr = document.createElement("tr")
+          if (!row || Object.values(row).every(v => v === "")) return;
+          let tr = document.createElement("tr");
           Object.keys(row).forEach(col => {
-            let td = document.createElement("td")
-            let val = (row[col] || "").replace(/_/g, "")
+            let td = document.createElement("td");
+            let val = (row[col] || "").replace(/_/g, "");
             if (col === "side") {
-              if (val === "BUY") val = "매수"
-              else if (val === "SELL") val = "매도"
-              else if (val === "SNAP") val = "유지"
+              if (val === "BUY") val = "매수";
+              else if (val === "SELL") val = "매도";
+              else if (val === "SNAP") val = "유지";
             } else if (col === "reason") {
-              if (val === "INIT") val = "초기매수"
-              else if (val === "TP") val = "익절"
-              else if (val === "SL") val = "손절"
-              else if (val === "TIME") val = "시간만료"
-              else if (val === "HEARTBEAT") val = "스냅샷"
+              if (val === "INIT") val = "초기매수";
+              else if (val === "TP") val = "익절";
+              else if (val === "SL") val = "손절";
+              else if (val === "TIME") val = "시간만료";
+              else if (val === "HEARTBEAT") val = "스냅샷";
             } else if (col === "asof_date" || col === "entry_date" || col === "ts" || col === "날짜") {
               if (val.length >= 10) {
                 if (val.length > 10) {
-                  let datePart = val.substring(5, 10)
-                  let timePart = val.substring(11, 16)
-                  val = datePart + " " + timePart
+                  let datePart = val.substring(5, 10);
+                  let timePart = val.substring(11, 16);
+                  val = datePart + " " + timePart;
                 } else {
-                  val = val.substring(5)
+                  val = val.substring(5);
                 }
               }
             } else if (!noFormatCols.includes(col) && !isNaN(val) && val !== "") {
-              val = new Intl.NumberFormat("ko-KR").format(parseFloat(val.replace(/[_ ,]/g,"")))
+              val = new Intl.NumberFormat("ko-KR").format(parseFloat(val.replace(/[_ ,]/g,"")));
             }
-            td.textContent = val
-            tr.appendChild(td)
-          })
+            td.textContent = val;
+            tr.appendChild(td);
+          });
           if (withPnL) {
-            let td = document.createElement("td")
-            let buy = parseFloat((row["매입단가"] || "0").replace(/[_ ,]/g,""))
-            let now = parseFloat((row["현재가"] || "0").replace(/[_ ,]/g,""))
-            if (now > buy) td.innerHTML = '<span style="color:#e57373; font-weight:600;">이익</span>'
-            else if (now < buy) td.innerHTML = '<span style="color:#64b5f6; font-weight:600;">손해</span>'
-            else td.innerHTML = '<span style="color:#e0e0e0;">-</span>'
-            tr.appendChild(td)
+            let td = document.createElement("td");
+            let buy = parseFloat((row["매입단가"] || "0").replace(/[_ ,]/g,""));
+            let now = parseFloat((row["현재가"] || "0").replace(/[_ ,]/g,""));
+            if (!isNaN(now) && !isNaN(buy)) {
+              if (now > buy) td.innerHTML = '<span style="color:#e57373; font-weight:600;">이익</span>';
+              else if (now < buy) td.innerHTML = '<span style="color:#64b5f6; font-weight:600;">손해</span>';
+              else td.innerHTML = '<span style="color:#e0e0e0;">-</span>';
+            } else {
+              td.innerHTML = '<span style="color:#e0e0e0;">-</span>';
+            }
+            tr.appendChild(td);
           }
-          tbody.appendChild(tr)
-        })
+          tbody.appendChild(tr);
+        });
       }
-    })
+    });
   }
 
-  loadCardData()
-  loadCSVtoTable("/data/results/account_log.csv", "accountTable", false, 5)
-  loadCSVtoTable("/data/results/trades_log.csv", "tradesTable", false, 5)
-  loadCSVtoTable("/data/results/portfolio_summary.csv", "summaryTable")
-  loadCSVtoTable("/data/results/portfolio_holdings.csv", "holdingsTable", true)
-  loadCSVtoTable("/data/results/preds.csv", "predsTable", false, 5)
-  loadCSVtoTable("/data/results/today_recos.csv", "recosTable")
-
-Papa.parse("/data/results/equity_log.csv", {
-  download: true,
-  header: true,
-  complete: function(results) {
-    let rows = results.data.filter(r => r.ts && r.equity)
-    if (rows.length === 0) return
-
-    let firstRow = rows[0]
-    let lastRow = rows[rows.length - 1]
-
-    let equity = parseFloat((lastRow["equity"] || "0").replace(/[_ ,]/g,""))
-    let cumReturn = parseFloat((lastRow["cum_return"] || "0").replace(/[_ ,]/g,"")) * 100
-    let todayPnL = parseFloat((lastRow["total_pnl"] || "0").replace(/[_ ,]/g,"")) -
-                   parseFloat((firstRow["total_pnl"] || "0").replace(/[_ ,]/g,""))
-
-    document.getElementById("card-equity").querySelector("span").textContent =
-      new Intl.NumberFormat("ko-KR").format(equity)
-    document.getElementById("card-return").querySelector("span").textContent =
-      cumReturn.toFixed(2) + "%"
-    document.getElementById("card-todaypnl").querySelector("span").textContent =
-      new Intl.NumberFormat("ko-KR").format(todayPnL)
-  }
-})
-
-Papa.parse("/data/results/equity_log.csv", {
-  download: true,
-  header: true,
-  complete: function(results) {
-    let labels = []
-    let equity = []
-    let cumReturn = []
-
-    results.data.forEach(row => {
-      if (!row.ts) return
-      labels.push(row.ts.substring(5)) // MM-DD hh:mm → 뒤에서 substring
-      if (row.equity) equity.push(parseFloat(row.equity.replace(/[_ ,]/g, "")))
-      if (row.cum_return) cumReturn.push(parseFloat(row.cum_return.replace(/[_ ,]/g, "")) * 100)
-    })
-
-    const ctx1 = document.getElementById("equityChart").getContext("2d")
-    if (window.equityChart && typeof window.equityChart.destroy === "function") window.equityChart.destroy()
-    window.equityChart = new Chart(ctx1, {
-      type: "line",
-      data: {
-        labels: labels,
-        datasets: [{
-          label: "총 평가금액",
-          data: equity,
-          borderWidth: 2,
-          borderColor: "#40e0d0",
-          backgroundColor: "rgba(154,196,255,0.15)",
-          pointRadius: 2,
-          tension: 0
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        aspectRatio: 1,
-        scales: {
-          x: { grid: { color: "#555" }, ticks: { display: false } },
-          y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => new Intl.NumberFormat("ko-KR").format(v) } }
-        },
-        plugins: { legend: { labels: { color: "#e0e0e0" } } }
-      }
-    })
-
-    const ctx2 = document.getElementById("cumReturnChart").getContext("2d")
-    if (window.cumReturnChart && typeof window.cumReturnChart.destroy === "function") window.cumReturnChart.destroy()
-    window.cumReturnChart = new Chart(ctx2, {
-      type: "line",
-      data: {
-        labels: labels,
-        datasets: [{
-          label: "누적수익률 (%)",
-          data: cumReturn,
-          borderWidth: 2,
-          borderColor: "#ff9800",
-          backgroundColor: "rgba(255, 193, 7, 0.15)",
-          pointRadius: 2,
-          tension: 0
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        aspectRatio: 1,
-        scales: {
-          x: { grid: { color: "#555" }, ticks: { display: false } },
-          y: { grid: { color: "#555" }, ticks: { color: "#e0e0e0", callback: v => v.toFixed(2) + "%" } }
-        },
-        plugins: { legend: { labels: { color: "#e0e0e0" } } }
-      }
-    })
-  }
-})
-
+  // 경로 전부 results 기준
+  loadCardAndCharts();
+  loadCSVtoTable("/results/account_log.csv", "accountTable", false, 5);
+  loadCSVtoTable("/results/trades_log.csv", "tradesTable", false, 5);
+  loadCSVtoTable("/results/portfolio_summary.csv", "summaryTable");
+  loadCSVtoTable("/results/portfolio_holdings.csv", "holdingsTable", true);
+  loadCSVtoTable("/results/preds.csv", "predsTable", false, 5);
+  loadCSVtoTable("/results/today_recos.csv", "recosTable");
 </script>
 </body>
 </html>

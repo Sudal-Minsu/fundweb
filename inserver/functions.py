@@ -11,6 +11,9 @@ import os, datetime as dt
 import pandas as pd
 import csv
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def get_api_keys():
     return APP_KEY, APP_SECRET
@@ -253,7 +256,9 @@ def check_account(app_key=None, app_secret=None, access_token=None):
 
     return [res1, res2]
 
-def log_order_to_csv(log_data, log_path="results_3/order_log.csv"):
+def log_order_to_csv(log_data, log_path=None):
+    if log_path is None:
+        log_path = os.path.join(OUTPUT_DIR, "trades_log.csv")
     # 폴더 없으면 생성
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
@@ -266,13 +271,11 @@ def log_order_to_csv(log_data, log_path="results_3/order_log.csv"):
         writer.writerow(log_data)
 
 
-BASE_DIR   = "results_3"
-CSV_PATH   = os.path.join(BASE_DIR, "account_log.csv")
-OUT_EQUITY = os.path.join(BASE_DIR, "총평가금액_추세.png")
-OUT_RET    = os.path.join(BASE_DIR, "수익률_추세.png")
-os.makedirs(BASE_DIR, exist_ok=True)
-START_CAPITAL = 100_000_000  # 초기 투자금
-HOLDINGS_CSV = os.path.join(BASE_DIR, "holdings.csv")
+CSV_PATH   = os.path.join(OUTPUT_DIR, "account_log.csv")
+OUT_EQUITY = os.path.join(OUTPUT_DIR, "총평가금액_추세.png")
+OUT_RET    = os.path.join(OUTPUT_DIR, "수익률_추세.png")
+START_CAPITAL = 100_000_000
+HOLDINGS_CSV = os.path.join(OUTPUT_DIR, "holdings.csv")
 
 def _ensure_holdings_csv():
     os.makedirs(BASE_DIR, exist_ok=True)

@@ -8,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.1"></script>
   <style>
     html, body {
       margin: 0;
@@ -243,11 +243,16 @@
 
           results.data.forEach(row => {
             if (!row || Object.values(row).every(v => v === "")) return
-            if (
-              tableId === "tradeLogTable" &&
-              "주문결과" in row &&
-              row["주문결과"].trim() !== "주문성공"
-            ) return
+
+            // ★ 수정 부분: 매매 로그 필터 로직 변경
+            if (tableId === "tradeLogTable" && "주문결과" in row && row["주문결과"]) {
+              const msg = String(row["주문결과"]).trim()
+              const lower = msg.toLowerCase()
+              const errorKeywords = ["오류","거부","불가","매매불가","거절","취소","error","fail","invalid"]
+              if (msg === "NO_RESPONSE" || errorKeywords.some(k => msg.includes(k) || lower.includes(k))) {
+                return
+              }
+            }
 
             let tr = document.createElement("tr")
 
@@ -500,9 +505,9 @@
     loadCSVtoTable("/data/results/buy_list.csv", "buyListTable")
     loadConfusionMatrix("/data/results/confusion_matrix.csv", "confusionMatrixChart")
     loadCSVtoTable("/data/results/trade_log_2.csv", "tradeLogTable")
-    loadCSVtoTable("/data/results/포트폴리오.csv", "portfolioTable")
-    loadCSVtoTable("/data/results/보유종목.csv", "holdingsTable")
-    loadEvalCharts("/data/results/평가자료.csv")
+    loadCSVtoTable("/data/results/portfolio_choi.csv", "portfolioTable")
+    loadCSVtoTable("/data/results/holdings.csv", "holdingsTable")
+    loadEvalCharts("/data/results/eval.csv")
   </script>
 </body>
 </html>

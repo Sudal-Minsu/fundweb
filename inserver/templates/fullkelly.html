@@ -126,6 +126,7 @@
       border-radius: 6px;
       padding: 12px;
       background: #2f2f2f;
+      height: 360px;
     }
   </style>
 </head>
@@ -141,7 +142,7 @@
       <a href="/daily_trading">Daily Trading</a>
       <a href="/fullkelly" class="active">Full Kelly</a>
       <a href="/triplebarrier_bot">TripleBarrier Bot</a>
-      <a href="/ranking" class="active">Ranking</a>
+      <a href="/ranking">Ranking</a>
     </div>
   </nav>
 
@@ -177,7 +178,11 @@
   </div>
 
 <script>
-const noFormatCols = ["종목코드","주문종류","거래시간","타임스탬프"];
+const noFormatCols = [
+  "종목코드","주문종류","거래시간","타임스탬프",
+  "timestamp","code","side","result_msg","loop","루프"
+];
+
 const PATH = {
   equity: "/data/results/equity_curve.csv",
   trades: "/data/results/trade_log.csv",
@@ -215,46 +220,65 @@ function loadCSVtoTable(csvPath, tableId) {
       let tbody = table.querySelector("tbody");
       thead.innerHTML = "";
       tbody.innerHTML = "";
-      if (results.data.length === 0) return;
+      if (!results.data || results.data.length === 0) return;
+
+      let firstRow = results.data.find(r => r && Object.keys(r).length > 0);
+      if (!firstRow) return;
 
       let headerRow = document.createElement("tr");
-      Object.keys(results.data[0]).forEach(col => {
-        if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과") return;
+      Object.keys(firstRow).forEach(col => {
+        if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과" ||
+            col === "loop" || col === "kelly_f" || col === "result_msg") {
+          return;
+        }
         let th = document.createElement("th");
-        if (col === "타임스탬프") th.textContent = "시간";
-        else if (col === "기대수익") th.textContent = "기대 수익";
-        else if (col === "예상손실") th.textContent = "예상 손실";
-        else if (col === "권장수량") th.textContent = "권장 수량";
-        else if (col === "상승확률(%)") th.textContent = "상승 확률(%)";
+        if (col === "타임스탬프" || col === "timestamp") th.textContent = "시간";
+        else if (col === "기대수익" || col === "expected_profit") th.textContent = "기대 수익";
+        else if (col === "예상손실" || col === "expected_loss") th.textContent = "예상 손실";
+        else if (col === "권장수량" || col === "optimal_qty") th.textContent = "권장 수량";
+        else if (col === "상승확률(%)" || col === "상승확률(p)" || col === "prob_up_pct") th.textContent = "상승 확률(%)";
         else if (col === "거래시간") th.textContent = "거래 시간";
-        else if (col === "상승확률(p)") th.textContent = "상승 확률(%)";
-        else if (col === "주문수량") th.textContent = "주문 수량";
-        else if (col === "주문종류") th.textContent = "주문 종류";
-        else if (col === "손익비(R)") th.textContent = "손익비";
+        else if (col === "주문수량" || col === "qty") th.textContent = "수량";
+        else if (col === "주문종류" || col === "side") th.textContent = "주문 종류";
+        else if (col === "손익비(R)" || col === "rr_ratio") th.textContent = "손익비";
+        else if (col === "code" || col === "종목코드") th.textContent = "종목코드";
+        else if (col === "price") th.textContent = "가격";
         else th.textContent = col;
-        if (col === "타임스탬프") headerRow.prepend(th);
-        else headerRow.appendChild(th);
+
+        if (col === "타임스탬프" || col === "timestamp" || col === "거래시간") {
+          headerRow.prepend(th);
+        } else {
+          headerRow.appendChild(th);
+        }
       });
       thead.appendChild(headerRow);
 
       results.data.forEach(row => {
         if (!row || Object.values(row).every(v => v === "")) return;
-        if ("주문결과" in row && row["주문결과"] !== "정상처리") return;
+        if (row["주문결과"] && row["주문결과"] !== "정상처리") return;
+        if (row["result_msg"] && typeof row["result_msg"] === "string" && row["result_msg"].includes("오류")) return;
 
         let tr = document.createElement("tr");
         let orderedCols = Object.keys(row);
-        if (orderedCols.includes("타임스탬프")) {
-          orderedCols = ["타임스탬프", ...orderedCols.filter(c => c !== "타임스탬프")];
-        }
+        const timeCols = ["timestamp","타임스탬프","거래시간"];
+        timeCols.forEach(tc => {
+          if (orderedCols.includes(tc)) {
+            orderedCols = [tc].concat(orderedCols.filter(c => c !== tc));
+          }
+        });
 
         orderedCols.forEach(col => {
-          if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과") return;
+          if (col === "루프" || col === "켈리비율(f*)" || col === "주문결과" ||
+              col === "loop" || col === "kelly_f" || col === "result_msg") {
+            return;
+          }
           let td = document.createElement("td");
-          let val = row[col] || "";
+          let val = row[col];
+          if (val === null || val === undefined) val = "";
 
-          if ((col === "거래시간" || col === "타임스탬프") && val.length >= 16) {
-            val = val.substring(5, 16).replace('T',' ');
-          } else if (!noFormatCols.includes(col) && !isNaN(val) && val !== "") {
+          if ((col === "거래시간" || col === "타임스탬프" || col === "timestamp") && val && val.length >= 16) {
+            val = val.replace("T"," ").substring(5, 16);
+          } else if (!noFormatCols.includes(col) && val !== "" && !isNaN(val)) {
             val = new Intl.NumberFormat("ko-KR").format(parseFloat(val));
           }
 
@@ -272,18 +296,37 @@ function loadSummaryCards() {
     download: true,
     header: true,
     complete: function (results) {
-      if (results.data.length === 0) return;
-      let lastRow = results.data[results.data.length - 1];
-      let equity = lastRow["total_value"] || "0";
-      let cumReturn = lastRow["cum_return"] || "0";
+      if (!results.data || results.data.length === 0) return;
+      let lastRow = null;
+      for (let i = results.data.length - 1; i >= 0; i--) {
+        if (results.data[i] && Object.keys(results.data[i]).length > 0) {
+          lastRow = results.data[i];
+          break;
+        }
+      }
+      if (!lastRow) return;
+
+      let equityRaw = lastRow["total_value"];
+      let cumRaw = lastRow["cum_return"];
+
+      if (equityRaw === undefined) equityRaw = lastRow["총평가금액"];
+      if (cumRaw === undefined) cumRaw = lastRow["누적수익률"];
+
+      let equity = parseFloat(equityRaw || "0");
+      let cumReturn = parseFloat(cumRaw || "0");
+
       const cardEquity = document.getElementById("card-equity");
       const cardReturn = document.getElementById("card-return");
 
       if (cardEquity) {
-        cardEquity.querySelector("span").textContent = new Intl.NumberFormat("ko-KR").format(parseFloat(equity));
+        cardEquity.querySelector("span").textContent =
+          new Intl.NumberFormat("ko-KR").format(equity);
       }
       if (cardReturn) {
-        cardReturn.querySelector("span").textContent = (parseFloat(cumReturn) * 100).toFixed(2) + "%";
+        if (Math.abs(cumReturn) < 1 && cumReturn !== 0) {
+          cumReturn = cumReturn * 100;
+        }
+        cardReturn.querySelector("span").textContent = cumReturn.toFixed(2) + "%";
       }
     }
   });
@@ -294,14 +337,41 @@ function loadEquityCurve() {
     download: true,
     header: true,
     complete: function (results) {
+      if (!results.data || results.data.length === 0) return;
+
+      let sample = results.data.find(r => r && Object.keys(r).length > 0);
+      if (!sample) return;
+
+      let keys = Object.keys(sample);
+      function findKey(fallback, predicate) {
+        let found = keys.find(predicate);
+        return found || fallback;
+      }
+
+      let timeKey = findKey("time", k => k.toLowerCase().includes("time"));
+      let totalKey = findKey("total_value", k => k.toLowerCase().includes("total"));
+      let returnKey = findKey("cum_return", k => k.toLowerCase().includes("cum") || k.toLowerCase().includes("return"));
+
       let labels = [];
       let equity = [];
       let cumReturn = [];
+
       results.data.forEach(row => {
-        if (!row.time) return;
-        labels.push(row.time.substring(5));
-        equity.push(parseFloat(row.total_value));
-        cumReturn.push(parseFloat(row.cum_return) * 100);
+        if (!row) return;
+        let t = row[timeKey];
+        if (!t) return;
+        let tStr = String(t);
+        if (tStr.length > 5) {
+          labels.push(tStr.substring(5));
+        } else {
+          labels.push(tStr);
+        }
+
+        let v = parseFloat(row[totalKey] || "0");
+        let c = parseFloat(row[returnKey] || "0");
+        if (Math.abs(c) < 1 && c !== 0) c = c * 100;
+        equity.push(v);
+        cumReturn.push(c);
       });
 
       const ctx1 = document.getElementById("equityChart").getContext("2d");
@@ -356,34 +426,44 @@ function calculateTodaysPnL() {
     download: true,
     header: true,
     complete: function (results) {
+      if (!results.data || results.data.length === 0) {
+        const cardTodayPnL = document.getElementById("card-todaypnl");
+        if (cardTodayPnL) {
+          cardTodayPnL.querySelector("span").textContent =
+            new Intl.NumberFormat("ko-KR").format(0);
+        }
+        return;
+      }
+
       results.data.forEach(row => {
         if (!row || Object.values(row).every(v => v === "")) return;
-        if (row["주문결과"] && row["주문결과"] !== "정상처리") return;
 
-        const t = row["거래시간"] || row["타임스탬프"] || "";
+        const t = row["timestamp"] || row["타임스탬프"] || row["거래시간"] || "";
         if (!t) return;
-        const tradeDate = new Date(t.replace(" ", "T"));
+        const tradeDate = new Date(String(t).replace(" ", "T"));
         if (isNaN(tradeDate)) return;
 
         const tradeDay = tradeDate.toISOString().substring(0,10);
         if (tradeDay !== formattedToday) return;
 
-        const code  = row["종목코드"];
-        const qty   = parseFloat(row["주문수량"] || "0");
-        const price = parseFloat(row["현재가"] || row["체결가"] || row["단가"] || "0");
-        const side  = (row["주문종류"] || "").trim();
+        const code  = row["code"] || row["종목코드"];
+        const qty   = parseFloat(row["qty"] || row["주문수량"] || "0");
+        const price = parseFloat(row["price"] || row["현재가"] || row["체결가"] || row["단가"] || "0");
+        let side    = row["side"] || row["주문종류"] || "";
+        side = String(side).trim();
 
         if (!code || !qty || !price) return;
 
-        positions[code] = positions[code] || { qty: 0, avg: 0 };
+        if (!positions[code]) {
+          positions[code] = { qty: 0, avg: 0 };
+        }
+        const p = positions[code];
 
-        if (side.includes("매수") || side.toLowerCase() === "buy") {
-          const p = positions[code];
+        if (side.includes("매수") || side.toUpperCase() === "BUY") {
           const newQty = p.qty + qty;
           p.avg = newQty ? ((p.avg * p.qty) + (price * qty)) / newQty : p.avg;
           p.qty = newQty;
-        } else if (side.includes("매도") || side.toLowerCase() === "sell") {
-          const p = positions[code];
+        } else if (side.includes("매도") || side.toUpperCase() === "SELL") {
           const sellQty = Math.min(qty, p.qty || qty);
           todayPnL += (price - (p.avg || price)) * sellQty;
           p.qty = Math.max(0, (p.qty || 0) - sellQty);

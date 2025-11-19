@@ -80,5 +80,5 @@ def serve_csv(folder, filename):
 
 # 🔹 Flask 실행
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5002))
+    port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
