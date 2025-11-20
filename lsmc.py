@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-lsmc.py (inserver + config_Jin)
-- 루트(fundweb)/config_Jin.py만 사용 (상위 폴더 의존 허용)
-- 모든 산출물/로그: inserver/data/results, inserver/logs (영문 파일명)
-- buy_list.csv는 inserver/data/results에서 탐색
+lsmc.py (repo-root + config_Jin)
+- 루트(~/Quant/fundweb)/config_Jin.py만 사용
+- 모든 산출물/로그: ~/Quant/fundweb/data/results (영문 파일명)
+- buy_list.csv는 ~/Quant/fundweb/data/results에서 탐색
 - DRY_RUN(기본 1)일 때 주문은 실제로 보내지 않음
 """
 
@@ -19,18 +19,20 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # ─────────────────────────────
-# 경로 고정 (inserver 기준)
+# 경로 고정 (repo-root 기준)
 # ─────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))     # .../fundweb/inserver
-REPO_ROOT  = os.path.dirname(BASE_DIR)                      # .../fundweb
-OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
-LOG_DIR    = os.path.join(BASE_DIR, "logs")
+HOME_DIR   = os.path.expanduser("~")
+REPO_ROOT  = os.path.join(HOME_DIR, "Quant", "fundweb")      # ~/Quant/fundweb
+BASE_DIR   = REPO_ROOT                                       # 호환용
+OUTPUT_DIR = os.path.join(REPO_ROOT, "data", "results")      # ~/Quant/fundweb/data/results
+LOG_DIR    = os.path.join(OUTPUT_DIR, "logs")                # ~/Quant/fundweb/data/results/logs
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 BUYLIST_PATH   = os.path.join(OUTPUT_DIR, "buy_list.csv")
 LOG_FILE       = os.path.join(OUTPUT_DIR, "trade_log.csv")
-PORTFOLIO_PATH = os.path.join(BASE_DIR, "portfolio.json")
+PORTFOLIO_PATH = os.path.join(REPO_ROOT, "portfolio.json")
 
 # ─────────────────────────────
 # 설정/비밀: 루트의 config_Jin.py 사용
@@ -293,6 +295,8 @@ def lsmc_expected_profit_and_risk_with_prob(stock_code, current_price):
 # ─────────────────────────────
 if __name__ == "__main__":
     print("Working directory:", os.getcwd(), flush=True)
+    print("OUTPUT_DIR:", OUTPUT_DIR, flush=True)
+    print("BUYLIST_PATH:", BUYLIST_PATH, flush=True)
 
     # 1) buy_list.csv 로드
     if not os.path.exists(BUYLIST_PATH):

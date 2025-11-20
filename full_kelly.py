@@ -1,61 +1,99 @@
 # -*- coding: utf-8 -*-
+"""
+Full-Kelly trader with optional RANDOM 3~5-stock universe (no buy_list.csv).
+- Reads credentials from repo-root/config_Jin.py  (DB_CONFIG, get_api_keys(), ACCOUNT_INFO)
+- If USE_RANDOM_UNIVERSE=True → ignore buy_list.csv and pick 3~5 random tickers.
+- Otherwise behaves like your existing script loading data/results/buy_list.csv.
+- Optional: enable simple 3-week performance export (CSV/PNG) via ENABLE_3W.
+
+Files written under ~/Quant/fundweb/data/results/:
+- trade_log.csv, equity_curve.csv
+- (if ENABLE_3W) equity_curve_3weeks.csv / equity_curve_3weeks.png
+"""
 
 import os
+import sys
 import time
 import json
+import random
 import requests
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import matplotlib.pyplot as plt
-import shutil
 
 # ─────────────────────────────────────────────
-# inserver 기준 경로 고정
+# 경로 고정: ~/Quant/fundweb 기준
 # ─────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))     # .../fundweb/inserver
-OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
-LOG_DIR    = os.path.join(BASE_DIR, "logs")
+HOME_DIR   = os.path.expanduser("~")
+REPO_ROOT  = os.path.join(HOME_DIR, "Quant", "fundweb")      # ~/Quant/fundweb
+BASE_DIR   = REPO_ROOT                                       # repo root
+OUTPUT_DIR = os.path.join(REPO_ROOT, "data", "results")      # ~/Quant/fundweb/data/results
+LOG_DIR    = os.path.join(OUTPUT_DIR, "logs")                # ~/Quant/fundweb/data/results/logs
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 BUYLIST_PATH   = os.path.join(OUTPUT_DIR, "buy_list.csv")
 LOG_FILE       = Path(OUTPUT_DIR) / "trade_log.csv"
-PORTFOLIO_PATH = os.path.join(BASE_DIR, "portfolio.json")
+PORTFOLIO_PATH = os.path.join(REPO_ROOT, "portfolio.json")
 
 # ─────────────────────────────────────────────
-# 설정 파일: inserver/config_local.py
+# 설정 파일: 루트의 config_Jin.py만 사용
 # ─────────────────────────────────────────────
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 try:
-    from config_local import DB_CONFIG, get_api_keys, ACCOUNT_INFO
+    from config_Jin import DB_CONFIG, get_api_keys, ACCOUNT_INFO
+    print("✅ using repo-root/config_Jin.py")
 except Exception as e:
-    print("❌ config_local.py 불러오기 실패! inserver 폴더에 존재해야 합니다.")
-    print("   - config_local.py (secrets.json을 읽어 app_key/app_secret, CANO/ACNT_PRDT_CD 제공)")
-    print("   - secrets.json (상시모의투자 키/계좌)")
+    print("❌ config_Jin.py 불러오기 실패! fundweb 루트에 존재해야 합니다.")
+    print("   - 제공 항목: DB_CONFIG, get_api_keys(), ACCOUNT_INFO")
     print(f"오류: {e}")
     raise SystemExit(1)
 
 # ─────────────────────────────────────────────
 # 전략/실행 설정
 # ─────────────────────────────────────────────
-USE_FULL_EQUITY        = True
-EQUITY_UTILIZATION     = 1.0   # 100%
-TOTAL_BUY_BUDGET_ALL   = 100_000_000
-MAX_BUY_BUDGET         = 10_000_000
+USE_FULL_EQUITY          = True     # 계좌 총평가액 기반으로 운용
+EQUITY_UTILIZATION       = 1.0      # 100% 사용(리스크 낮추려면 <1.0)
+TOTAL_BUY_BUDGET_ALL     = 100_000_000  # USE_FULL_EQUITY=False일 때 사용
+MAX_BUY_BUDGET           = 10_000_000   # USE_FULL_EQUITY=False일 때 사용
 
-STOP_LOSS_PCT          = 0.025   # -2.5%
-TAKE_PROFIT_PCT        = 0.05    # +5%
+STOP_LOSS_PCT            = 0.025   # -2.5%
+TAKE_PROFIT_PCT          = 0.05    # +5%
 ENFORCE_TOTAL_BUDGET_CAP = True
 
-SELL_NON_CANDIDATES    = True
-CHECK_TP_SL_EVERY_LOOP = True
+SELL_NON_CANDIDATES      = True
+CHECK_TP_SL_EVERY_LOOP   = True
 
-# 실주문 방지 스위치 (기본 ON)
+# 실주문 방지 스위치 (기본 ON: 주문을 보내지 않음)
 DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
 
-# 모의투자 베이스 URL
+# 모의투자 베이스 URL (실계에서는 실서버로 바꾸세요)
 url_base = "https://openapivts.koreainvestment.com:29443"
+
+# ───────────── 랜덤 유니버스 옵션 ─────────────
+USE_RANDOM_UNIVERSE   = True            # ← True면 buy_list.csv를 무시하고 랜덤 3~5개로 운용
+RANDOM_MIN_CODES      = 3
+RANDOM_MAX_CODES      = 5
+RANDOM_SEED           = None            # 재현성 원하면 예: 42
+
+# 풀(pool)이 비어 있으면 보유/거래기록에서 자동 수집, 둘 다 없으면 아래 기본 리스트 사용
+RANDOM_UNIVERSE_POOL = [
+    # KOSPI 대형주 예시 (원하면 자유롭게 교체/추가)
+    "005930","000660","035420","051910","207940",
+    "068270","005380","035720","000270","005490",
+    "028260","012330","105560","055550","006400",
+]
+
+# ───────────── (선택) 최근 3주 성과 로그 옵션 ─────────────
+ENABLE_3W        = False
+TIME_WINDOW_DAYS = 21
+THREE_WEEKS_CSV  = Path(OUTPUT_DIR) / "equity_curve_3weeks.csv"
+THREE_WEEKS_PNG  = os.path.join(OUTPUT_DIR, "equity_curve_3weeks.png")
 
 # ───────────── 유틸 ─────────────
 def adjust_price_to_tick(price: int) -> int:
@@ -206,9 +244,7 @@ def send_order(stock_code: str, price: int, qty: int, order_type: str = "매수"
         return {"rt_cd": "-1", "msg1": "INVALID_JSON"}
 
 def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int, int]:
-    """
-    반환: (total_equity, cash, stock_eval)
-    """
+    """반환: (total_equity, cash, stock_eval)"""
     url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
     headers = {
         "Content-Type": "application/json",
@@ -275,7 +311,7 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
             if portfolio_snapshot:
                 for code, pos in portfolio_snapshot.items():
                     try:
-                        est += int(pos.get("qty", 0)) * (get_current_price(code) or 0)
+                        est += int(pos.get('qty', 0)) * (get_current_price(code) or 0)
                     except Exception:
                         pass
             total_equity = est
@@ -284,7 +320,7 @@ def get_account_totals(portfolio_snapshot: dict | None = None) -> tuple[int, int
         if portfolio_snapshot:
             for code, pos in portfolio_snapshot.items():
                 try:
-                    est += int(pos.get("qty", 0)) * (get_current_price(code) or 0)
+                    est += int(pos.get('qty', 0)) * (get_current_price(code) or 0)
                 except Exception:
                     pass
         total_equity = est
@@ -393,32 +429,128 @@ def compute_kelly_fraction(p: float, R: float) -> float:
     q = 1.0 - p
     return p - (q / R)
 
+# ───────────── 랜덤 유니버스 헬퍼 ─────────────
+def _recent_universe_from_tradelog(max_codes: int = 100) -> list[str]:
+    try:
+        if LOG_FILE.exists():
+            df = pd.read_csv(LOG_FILE)
+            codes = df["code"].astype(str).str.zfill(6).value_counts().index.tolist()
+            return codes[:max_codes]
+    except Exception:
+        pass
+    return []
+
+def _recent_universe_from_holdings(max_codes: int = 100) -> list[str]:
+    try:
+        url = f"{url_base}/uapi/domestic-stock/v1/trading/inquire-balance"
+        headers = {
+            "Content-Type": "application/json",
+            "authorization": f"Bearer {access_token}",
+            "appKey": app_key,
+            "appSecret": app_secret,
+            "tr_id": "VTTC8434R",
+        }
+        params = {
+            "CANO": ACCOUNT_INFO["CANO"],
+            "ACNT_PRDT_CD": ACCOUNT_INFO["ACNT_PRDT_CD"],
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "01",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        r = requests.get(url, headers=headers, params=params); time.sleep(1.2)
+        codes = []
+        for it in r.json().get("output1", []):
+            cd = str(it.get("pdno", "")).zfill(6)
+            if cd:
+                codes.append(cd)
+        seen = set()
+        uniq = [c for c in codes if not (c in seen or seen.add(c))]
+        return uniq[:max_codes]
+    except Exception:
+        return []
+
+def _pick_random_codes() -> list[str]:
+    pool = _recent_universe_from_tradelog() or _recent_universe_from_holdings() or RANDOM_UNIVERSE_POOL or []
+    if not pool:
+        pool = ["005930","000660","035720"]
+    n = random.randint(RANDOM_MIN_CODES, RANDOM_MAX_CODES)
+    n = min(n, len(pool))
+    if RANDOM_SEED is not None:
+        random.seed(RANDOM_SEED)
+    picked = sorted(random.sample(pool, n))
+    return picked
+
+def _make_rows_from_random_codes(codes: list[str]) -> list[dict]:
+    rows = []
+    for code in codes:
+        rows.append({"종목코드": str(code).zfill(6), "p": 0.55})  # 기본 p
+    return rows
+
+# ───────────── (선택) 3주 윈도우 유틸 ─────────────
+def _parse_time_str(ts: str) -> datetime:
+    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+
+def filter_last_days(curve: list[dict], days: int = TIME_WINDOW_DAYS) -> list[dict]:
+    if not curve:
+        return []
+    cutoff = datetime.now() - timedelta(days=days)
+    out = []
+    for x in curve:
+        try:
+            t = x['time'] if isinstance(x['time'], datetime) else _parse_time_str(str(x['time']))
+            if t >= cutoff:
+                out.append({**x, 'time_dt': t})
+        except Exception:
+            pass
+    return sorted(out, key=lambda z: z['time_dt'])
+
+def compute_window_return(curve_win: list[dict]) -> float:
+    if len(curve_win) < 2:
+        return 0.0
+    base = float(curve_win[0]['total_value']) if curve_win[0]['total_value'] else 0.0
+    last = float(curve_win[-1]['total_value']) if curve_win[-1]['total_value'] else 0.0
+    if base <= 0:
+        return 0.0
+    return (last / base) - 1.0
+
 # ───────────── 메인 ─────────────
 if __name__ == "__main__":
-    print("📊 buy_list.csv 로드 중…", flush=True)
-    if not os.path.exists(BUYLIST_PATH):
-        print("❌ buy_list.csv 없음:", os.path.abspath(BUYLIST_PATH))
-        raise SystemExit(1)
+    # 후보 구성
+    if USE_RANDOM_UNIVERSE:
+        picked = _pick_random_codes()
+        print(f"🎲 랜덤 유니버스 선택: {picked}", flush=True)
+        rows = _make_rows_from_random_codes(picked)
+    else:
+        print("📊 buy_list.csv 로드 중…", flush=True)
+        if not os.path.exists(BUYLIST_PATH):
+            print("❌ buy_list.csv 없음:", os.path.abspath(BUYLIST_PATH))
+            raise SystemExit(1)
+        df_cand = pd.read_csv(BUYLIST_PATH, dtype={'종목코드': str, 'code': str})
+        rows = []
+        for _, row in df_cand.iterrows():
+            d = row.to_dict()
+            code = (d.get('종목코드') or d.get('code') or '').zfill(6)
+            if not code:
+                continue
+            d['종목코드'] = code
+            rows.append(d)
 
-    df_cand = pd.read_csv(BUYLIST_PATH, dtype={'종목코드': str, 'code': str})
-    rows = []
-    for _, row in df_cand.iterrows():
-        d = row.to_dict()
-        code = (d.get('종목코드') or d.get('code') or '').zfill(6)
-        if not code:
-            continue
-        d['종목코드'] = code
-        rows.append(d)
     if not rows:
         print("❌ 유효 후보 없음")
         raise SystemExit(1)
 
     current_buy_codes = set([r['종목코드'] for r in rows])
-    print(f"✅ 후보 수: {len(rows)}", flush=True)
+    print(f"✅ 후보 수: {len(rows)}  (USE_RANDOM_UNIVERSE={USE_RANDOM_UNIVERSE})", flush=True)
 
     loop_count = 1
     portfolio = load_portfolio()
-    equity_curve = []
+    equity_curve: list[dict] = []
     R = TAKE_PROFIT_PCT / STOP_LOSS_PCT
 
     try:
@@ -432,6 +564,7 @@ if __name__ == "__main__":
                 check_takeprofit_stoploss(portfolio)
                 save_portfolio(portfolio)
 
+            # 운용 예산 산출
             if USE_FULL_EQUITY:
                 total_equity, cash, stock_eval = get_account_totals(portfolio)
                 effective_total_budget = int(total_equity * EQUITY_UTILIZATION)
@@ -440,11 +573,9 @@ if __name__ == "__main__":
                     loop_count += 1
                     time.sleep(600)
                     continue
-                effective_max_per_stock = float("inf")
-                print(f"💰 Total equity={total_equity:,} / utilization={EQUITY_UTILIZATION*100:.0f}% → budget={effective_total_budget:,}", flush=True)
+                print(f"💰 Total equity={total_equity:,} / utilization={int(EQUITY_UTILIZATION*100)}% → budget={effective_total_budget:,}", flush=True)
             else:
                 effective_total_budget = int(TOTAL_BUY_BUDGET_ALL)
-                effective_max_per_stock = MAX_BUY_BUDGET
 
             # 후보별 p, f* 계산
             kelly_list = []
@@ -477,8 +608,6 @@ if __name__ == "__main__":
             allocated_total = 0
             for x in sorted(kelly_list, key=lambda z: z['fstar'], reverse=True):
                 target_value = effective_total_budget * (x['fstar'] / sum_f)
-                if np.isfinite(MAX_BUY_BUDGET):
-                    target_value = min(target_value, float('inf'))  # no cap when using full equity
                 if ENFORCE_TOTAL_BUDGET_CAP:
                     remain = effective_total_budget - allocated_total
                     target_value = 0 if remain <= 0 else min(target_value, remain)
@@ -539,7 +668,7 @@ if __name__ == "__main__":
 
             save_portfolio(portfolio)
 
-            # 평가금액 기록 & CSV 저장
+            # 평가금액 집계 & 저장
             total_value = 0
             for code, pos in portfolio.items():
                 shares = int(pos.get('qty', 0))
@@ -550,15 +679,43 @@ if __name__ == "__main__":
 
             now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             equity_curve.append({"time": now_str, "total_value": int(total_value)})
-            pd.DataFrame(equity_curve).to_csv(Path(OUTPUT_DIR) / "equity_curve.csv",
-                                              index=False, encoding='utf-8-sig')
+            pd.DataFrame(equity_curve).to_csv(
+                Path(OUTPUT_DIR) / "equity_curve.csv",
+                index=False,
+                encoding='utf-8-sig'
+            )
+
+            # (옵션) 3주 윈도우 파일 생성
+            if ENABLE_3W:
+                win = filter_last_days(equity_curve, TIME_WINDOW_DAYS)
+                ret_3w = compute_window_return(win)
+                if win:
+                    df_win = pd.DataFrame([{k: v for k, v in d.items() if k != 'time_dt'} for d in win])
+                    df_win['three_weeks_return_pct'] = round(ret_3w * 100.0, 6)
+                    df_win.to_csv(THREE_WEEKS_CSV, index=False, encoding='utf-8-sig')
+
+                    base = float(df_win.iloc[0]['total_value']) if df_win.iloc[0]['total_value'] else 0.0
+                    plt.rcParams['axes.unicode_minus'] = False
+                    plt.figure(figsize=(10, 6))
+                    if base > 0:
+                        norm = [(float(v)/base - 1.0)*100.0 for v in df_win['total_value'].tolist()]
+                        plt.plot(norm, label="3-Week Return (%)")
+                        plt.ylabel("Return (%)")
+                    else:
+                        plt.plot(df_win['total_value'].tolist(), label="3-Week Portfolio Value")
+                        plt.ylabel("Portfolio Value")
+                    plt.title("3-Week Window Performance")
+                    plt.xlabel("Observation")
+                    plt.grid(True); plt.legend(); plt.tight_layout()
+                    plt.savefig(THREE_WEEKS_PNG, dpi=300)
+
             print(f"[Loop {loop_count}] total value: {total_value:,.0f}", flush=True)
 
             loop_count += 1
             time.sleep(600)
 
     except KeyboardInterrupt:
-        print("사용자 중단! 누적 수익률 그래프/CSV 저장 중...", flush=True)
+        print("사용자 중단! CSV/그래프 저장 중...", flush=True)
 
     finally:
         try:
@@ -567,24 +724,32 @@ if __name__ == "__main__":
                 csv_path = Path(OUTPUT_DIR) / "equity_curve.csv"
                 df_eq.to_csv(csv_path, index=False, encoding='utf-8-sig')
                 print(f"✅ Equity CSV saved ({csv_path})", flush=True)
-        except Exception as e:
-            print(f"CSV 저장 중 오류: {e}", flush=True)
 
-        try:
-            if len(equity_curve) > 0:
-                plt.rcParams['axes.unicode_minus'] = False
-                plt.figure(figsize=(10, 6))
-                plt.plot([x['total_value'] for x in equity_curve], label="Cumulative Portfolio Value")
-                plt.title("Cumulative Return")
-                plt.xlabel("Loop")
-                plt.ylabel("Portfolio Value")
-                plt.grid(True)
-                plt.legend()
-                plt.tight_layout()
-                out_path = os.path.join(OUTPUT_DIR, "equity_curve.png")
-                plt.savefig(out_path, dpi=300)
-                print(f"✅ Equity curve saved ({out_path})", flush=True)
+                if ENABLE_3W:
+                    win = filter_last_days(equity_curve, TIME_WINDOW_DAYS)
+                    if win:
+                        ret_3w = compute_window_return(win)
+                        df_win = pd.DataFrame([{k: v for k, v in d.items() if k != 'time_dt'} for d in win])
+                        df_win['three_weeks_return_pct'] = round(ret_3w * 100.0, 6)
+                        df_win.to_csv(THREE_WEEKS_CSV, index=False, encoding='utf-8-sig')
+                        print(f"✅ 3-week CSV saved ({THREE_WEEKS_CSV})", flush=True)
+
+                        base = float(df_win.iloc[0]['total_value']) if df_win.iloc[0]['total_value'] else 0.0
+                        plt.rcParams['axes.unicode_minus'] = False
+                        plt.figure(figsize=(10, 6))
+                        if base > 0:
+                            norm = [(float(v)/base - 1.0)*100.0 for v in df_win['total_value'].tolist()]
+                            plt.plot(norm, label="3-Week Return (%)")
+                            plt.ylabel("Return (%)")
+                        else:
+                            plt.plot(df_win['total_value'].tolist(), label="3-Week Portfolio Value")
+                            plt.ylabel("Portfolio Value")
+                        plt.title("3-Week Window Performance")
+                        plt.xlabel("Observation")
+                        plt.grid(True); plt.legend(); plt.tight_layout()
+                        plt.savefig(THREE_WEEKS_PNG, dpi=300)
+                        print(f"✅ 3-week PNG saved ({THREE_WEEKS_PNG})", flush=True)
             else:
                 print("저장할 데이터가 없습니다.", flush=True)
         except Exception as e:
-            print(f"그래프 저장 중 오류: {e}", flush=True)
+            print(f"최종 저장 중 오류: {e}", flush=True)

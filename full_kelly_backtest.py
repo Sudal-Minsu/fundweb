@@ -1,263 +1,423 @@
+# -*- coding: utf-8 -*-
+"""
+full_kelly_backtest_line_only.py
+- Bar(Compare) 모드 완전 제거
+- 기간 연속 백테스트(라인 차트)만 수행
+- 실제 거래일만 사용, 휴장일 자동 스킵
+- CSV/PNG 저장: data/results/kelly_backtest_{START}_{END}.{csv,png}
+"""
+
 import os
 import sys
-import json
-import time
-import requests
-import pandas as pd
-import matplotlib.pyplot as plt
+import random
+from io import StringIO
+from urllib.parse import urljoin
 from pathlib import Path
 from datetime import datetime, timedelta
 
-"""
-폴백 종목 6개만으로, buy_list 없이도 바로 도는 고정비율(시가->종가) 백테스트 v2
-- ✅ KIS '기간별 시세' 엔드포인트 사용: inquire-daily-itemchartprice (TR: FHKST03010100)
-- ✅ 시작일/종료일을 정확히 반영 (이전 '최근 30개' 제한 API 문제 해결)
-- 기간이 길어 1회 100건 제한에 걸릴 수 있어, 내부적으로 날짜를 여러 구간으로 나눠 요청/병합
-- 매일 자본의 일정 비율(INVEST_FRACTION_PER_DAY)을 폴백 종목에 균등 배분해 시가→종가 데이 트레이드
-- 결과 CSV/PNG 저장
-필요:
-- config.py 안에 get_api_keys()가 있어야 함 (app_key, app_secret 리턴)
-"""
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import requests
 
-# ================= 설정 =================
-START_DATE = "20250601"   # YYYYMMDD
-END_DATE   = "20250709"   # YYYYMMDD
-OUTPUT_DIR = "rule_2_결과"
-CACHE_DIR  = Path(OUTPUT_DIR) / "price_cache_api_v2"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+START_DATE = "2025-10-24"  # inclusive
+END_DATE   = "2025-10-28"  # inclusive
 
-INITIAL_CASH = 10_000_000
-INVEST_FRACTION_PER_DAY = 0.10   # 매일 자본의 10%
+INIT_EQUITY           = 100_000_000
+EQUITY_UTILIZATION    = 1.0
+PER_STOCK_CAP_PCT     = 0.34
+MIN_ORDER_VALUE       = 1_000_000
 
-# 폴백 6종목 (원하면 교체)
-CODES = ["005930", "000660", "035420", "051910", "068270", "105560"]
+STOP_LOSS_PCT         = 0.025
+TAKE_PROFIT_PCT       = 0.05
+R                     = TAKE_PROFIT_PCT / STOP_LOSS_PCT  # 2.0
+TRIGGER_PRIORITY      = 'SL_FIRST'   # 'TP_FIRST' | 'SL_FIRST' | 'NEUTRAL'
 
-# 수수료/세금(검증 단계에서는 0으로 두고 먼저 형태 확인 추천)
-FEE_RATE = 0.00015
-TAX_RATE_SELL = 0.0025
+USE_RANDOM_UNIVERSE   = False
+RANDOM_MIN_CODES      = 3
+RANDOM_MAX_CODES      = 5
+RANDOM_SEED           = 42
+RANDOM_UNIVERSE_POOL  = [
+    "005930","000660","035420","051910","207940",
+    "068270","005380","035720","000270","005490",
+    "028260","012330","105560","055550","006400",
+]
 
-# 한 번의 API 호출로 반환 가능한 최대 건 대비 여유를 둔 윈도우 크기(일수)
-# (공식 제한 ~100건 기준, 영업일이 아닌 달력일로 90일 정도 권장)
-WINDOW_DAYS = 90
+FETCH_START_BUFFER = "2025-08-15"
+FETCH_END_BUFFER   = "2025-10-31"
 
-# ================= KIS 인증 =================
-from config import get_api_keys
-app_key, app_secret = get_api_keys()
-url_base = "https://openapivts.koreainvestment.com:29443"
+DEBUG_SPAN         = True
+DEBUG_ALLOCATION   = False
 
-SESSION = requests.Session()
-SESSION.headers.update({"content-type": "application/json"})
+# ─────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CANDIDATES = [
+    os.path.join(BASE_DIR, "data", "ohlcv"),
+    os.path.join(os.path.dirname(BASE_DIR), "data", "ohlcv"),
+    os.path.join(os.path.dirname(os.path.dirname(BASE_DIR)), "fundweb", "data", "ohlcv"),
+]
+DATA_DIR = None
+for d in CANDIDATES:
+    if "fundweb" in d.replace("\\", "/") and d.endswith(os.path.join("data", "ohlcv")):
+        DATA_DIR = d
+        break
+if DATA_DIR is None:
+    DATA_DIR = CANDIDATES[1]
 
-def get_token():
-    url = f"{url_base}/oauth2/tokenP"
-    data = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
-    res = SESSION.post(url, data=json.dumps(data), timeout=(3,10))
-    tok = res.json().get("access_token", "")
-    if not tok:
-        print("❌ 토큰 발급 실패:", res.json()); sys.exit(1)
-    print(f"액세스 토큰: {tok[:20]}...", flush=True)
-    return tok
+OUTPUT_DIR = os.path.join(BASE_DIR, "data", "results")
+BUYLIST_PATH = os.path.join(OUTPUT_DIR, "buy_list.csv")
 
-ACCESS_TOKEN = get_token()
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+print("📂 DATA_DIR =", DATA_DIR)
+print("📂 OUTPUT_DIR =", OUTPUT_DIR)
 
-# ================= 날짜 유틸 =================
-def ymd(dt: datetime) -> str:
-    return dt.strftime("%Y%m%d")
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
+def _to_date(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%d")
 
-def parse_ymd(s: str) -> datetime:
-    return datetime.strptime(s, "%Y%m%d")
+def daterange(start: str, end: str):
+    d0, d1 = _to_date(start), _to_date(end)
+    cur = d0
+    while cur <= d1:
+        yield cur.strftime("%Y-%m-%d")
+        cur += timedelta(days=1)
 
-def chunk_date_ranges(start: str, end: str, window_days: int) -> list[tuple[str,str]]:
-    s = parse_ymd(start)
-    e = parse_ymd(end)
-    ranges = []
-    cur = s
-    while cur <= e:
-        nxt = cur + timedelta(days=window_days-1)
-        if nxt > e:
-            nxt = e
-        ranges.append((ymd(cur), ymd(nxt)))
-        cur = nxt + timedelta(days=1)
-    return ranges
+def adjust_price_to_tick(price: int) -> int:
+    if price < 1000: tick = 1
+    elif price < 5000: tick = 5
+    elif price < 10000: tick = 10
+    elif price < 50000: tick = 50
+    elif price < 100000: tick = 100
+    elif price < 500000: tick = 500
+    else: tick = 1000
+    return int(price - (price % tick))
 
-# ================= 데이터 로딩/캐시 =================
-def api_fetch_itemchartprice(code: str, start: str, end: str) -> pd.DataFrame:
-    """
-    기간별 일봉 시세 API (정확한 날짜 범위 반영)
-    - TR: FHKST03010100
-    - 응답은 일반적으로 output2에 다건 시계열이 담김
-    """
-    url = f"{url_base}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-    headers = {
-        "authorization": f"Bearer {ACCESS_TOKEN}",
-        "appKey": app_key,
-        "appSecret": app_secret,
-        "tr_id": "FHKST03010100",
-        "Content-Type": "application/json",
-    }
-    params = {
-        "FID_COND_MRKT_DIV_CODE": "J",     # 주식/ETF/ETN
-        "FID_INPUT_ISCD": str(code).zfill(6),
-        "FID_INPUT_DATE_1": start,
-        "FID_INPUT_DATE_2": end,
-        "FID_PERIOD_DIV_CODE": "D",        # D=일, W=주, M=월, Y=년
-        "FID_ORG_ADJ_PRC": "0",            # 0: 수정주가, 1: 원주가
-    }
-    res = SESSION.get(url, headers=headers, params=params, timeout=(3, 10))
-    if res.status_code != 200:
-        return pd.DataFrame(columns=["date","open","high","low","close"]).astype({"date": str})
-    j = res.json()
-    # 계정/버전에 따라 output1/output2 배치가 다를 수 있어 안전하게 처리
-    out = j.get("output2") or j.get("output1") or []
-    if not out:
-        return pd.DataFrame(columns=["date","open","high","low","close"]).astype({"date": str})
+REQUIRED_COLS = ["date","open","high","low","close"]
 
-    raw = pd.DataFrame(out)
-    # 컬럼 매핑(필요시 print(raw.columns)로 확인)
-    colmap = {
-        "stck_bsop_date": "date",
-        "stck_oprc": "open",
-        "stck_hgpr": "high",
-        "stck_lwpr": "low",
-        "stck_clpr": "close",
-    }
-    use_cols = [c for c in colmap if c in raw.columns]
-    if not use_cols:
-        return pd.DataFrame(columns=["date","open","high","low","close"]).astype({"date": str})
-
-    df = raw[use_cols].rename(columns=colmap)
-    for c in ["open","high","low","close"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df = (
-        df.dropna(subset=["open","close"])
-          .sort_values("date")
-          .reset_index(drop=True)
-    )
-    # API가 과거->최근/최근->과거 정렬로 줄 수 있어도 위에서 sort로 정렬 보정
-    # 반환
+def load_daily_csv(code: str) -> pd.DataFrame | None:
+    p = Path(DATA_DIR) / f"{code}.csv"
+    if not p.exists():
+        return None
+    df = pd.read_csv(p)
+    if not set(REQUIRED_COLS).issubset(df.columns):
+        raise ValueError(f"CSV columns missing for {code}: need {REQUIRED_COLS}")
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
     return df
 
-def fetch_daily_prices_range_cached(code: str, start: str, end: str) -> pd.DataFrame:
-    """
-    - 길이가 긴 구간은 WINDOW_DAYS로 쪼개 여러 번 호출해 병합
-    - 병합 결과를 캐시에 저장
-    """
-    code = str(code).zfill(6)
-    cache_path = CACHE_DIR / f"{code}_{start}_{end}.csv"
-    if cache_path.exists():
+# ─────────────────────────────────────────────
+# NAVER FETCHER
+# ─────────────────────────────────────────────
+def fetch_ohlcv_naver(code: str, start: str, end: str, max_pages: int = 160) -> str:
+    base = "https://finance.naver.com"
+    url  = f"/item/sise_day.nhn?code={code}"
+    frames = []
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+    for page in range(1, max_pages + 1):
+        u = urljoin(base, url + f"&page={page}")
+        resp = session.get(u, timeout=10)
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+        if not tables:
+            break
+        df = tables[0].dropna().copy()
+        if df.empty:
+            break
+        df.columns = ["date","close","diff","open","high","low","volume"]
+        df["date"] = pd.to_datetime(df["date"], format="%Y.%m.%d", errors="coerce")
+        df = df[df["date"].notna()].copy()
+        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+        frames.append(df[["date","open","high","low","close","volume"]])
+        if frames[-1]["date"].min() <= start:
+            break
+
+    if not frames:
+        raise RuntimeError(f"No data scraped for {code}")
+
+    full = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["date"]).sort_values("date")
+    mask = (full["date"] >= start) & (full["date"] <= end)
+    out = full.loc[mask].copy()
+    if out.empty:
+        out = full.copy()
+
+    for c in ["open","high","low","close","volume"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    csv_path = os.path.join(DATA_DIR, f"{code}.csv")
+    out.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    return csv_path
+
+def ensure_ohlcv_for(codes, start: str, end: str):
+    """Ensure CSV exists *and* covers [start..end]. If not, refetch and overwrite."""
+    ok = []
+    for c in codes:
+        p = os.path.join(DATA_DIR, f"{c}.csv")
+        needs_fetch = False
+        if not os.path.exists(p):
+            needs_fetch = True
+        else:
+            try:
+                df = pd.read_csv(p)
+                if not set(REQUIRED_COLS).issubset(df.columns):
+                    needs_fetch = True
+                else:
+                    dmin = pd.to_datetime(df['date']).min().strftime('%Y-%m-%d')
+                    dmax = pd.to_datetime(df['date']).max().strftime('%Y-%m-%d')
+                    if dmax < end or dmin > start:
+                        needs_fetch = True
+            except Exception:
+                needs_fetch = True
         try:
-            return pd.read_csv(cache_path, dtype={"date": str})
-        except Exception:
-            pass
+            if needs_fetch:
+                print(f"⬇️ Fetching {c} (ensure coverage {start}~{end}) ...")
+                saved = fetch_ohlcv_naver(c, FETCH_START_BUFFER, FETCH_END_BUFFER)
+                print("   ->", saved)
+            else:
+                print(f"✅ Exists {p}")
+            ok.append(c)
+        except Exception as e:
+            print(f"⚠️ Fetch failed for {c}:", e)
+    return ok
 
-    ranges = chunk_date_ranges(start, end, WINDOW_DAYS)
-    dfs = []
-    for s, e in ranges:
-        df = api_fetch_itemchartprice(code, s, e)
-        if not df.empty:
-            # 범위 밖 데이터가 섞여 올 가능성에 대비한 필터
-            df = df[(df["date"] >= s) & (df["date"] <= e)]
-            dfs.append(df)
+# ─────────────────────────────────────────────
+# Kelly helpers
+# ─────────────────────────────────────────────
+def compute_p_from_history(df: pd.DataFrame, ref_date: str, lookback: int = 15,
+                           default_hit: float = 0.55) -> float:
+    hist = df[df['date'] < ref_date].tail(max(lookback+1, 20))
+    if len(hist) < lookback+1:
+        return default_hit
+    closes = hist['close'].astype(float).to_numpy()
 
-    if not dfs:
-        final_df = pd.DataFrame(columns=["date","open","high","low","close"]).astype({"date": str})
-    else:
-        final_df = (
-            pd.concat(dfs, ignore_index=True)
-              .drop_duplicates(subset=["date"])
-              .sort_values("date")
-              .reset_index(drop=True)
-        )
+    def last_n_return(arr, n):
+        if len(arr) < n+1 or arr[-(n+1)] <= 0: return 0.0
+        return float(arr[-1]/arr[-(n+1)] - 1.0)
 
-    try:
-        final_df.to_csv(cache_path, index=False, encoding="utf-8-sig")
-    except Exception:
-        pass
+    ret5  = last_n_return(closes, 5)
+    ret15 = last_n_return(closes, 15)
+    z = 0.6*ret5 + 0.4*ret15
+    p_raw = 1.0/(1.0+np.exp(-6.0*z))
+    p = float(np.clip(0.7*p_raw + 0.3*default_hit, 0.50, 0.80))
+    return p
 
-    return final_df
+def kelly_fraction(p: float, R: float) -> float:
+    q = 1.0 - p
+    return p - (q / R)
 
-# 날짜 합집합 캘린더(각 종목 일봉에서 날짜 모음)
-def build_dates(codes, start, end):
-    dates = set()
-    for code in codes:
-        px = fetch_daily_prices_range_cached(code, start, end)
-        if not px.empty:
-            dates.update(px["date"].tolist())
-    return sorted([d for d in dates if (d >= start and d <= end)])
+# ─────────────────────────────────────────────
+# Universe
+# ─────────────────────────────────────────────
+def pick_universe() -> list[str]:
+    if USE_RANDOM_UNIVERSE:
+        pool = RANDOM_UNIVERSE_POOL or []
+        if not pool:
+            pool = ["005930","000660","035720"]
+        rng = random.Random(RANDOM_SEED)
+        n = min(rng.randint(RANDOM_MIN_CODES, RANDOM_MAX_CODES), len(pool))
+        return sorted(rng.sample(pool, n))
+    if not os.path.exists(BUYLIST_PATH):
+        return ["000660","005930","012330","051910","207940"]
+    df = pd.read_csv(BUYLIST_PATH, dtype={'종목코드': str, 'code': str})
+    codes = []
+    for _, row in df.iterrows():
+        code = (row.get('종목코드') or row.get('code') or '').zfill(6)
+        if code:
+            codes.append(code)
+    codes = sorted(list(dict.fromkeys(codes)))
+    if not codes:
+        return ["000660","005930","012330","051910","207940"]
+    return codes
 
-# ================= 백테스트(시가->종가 데이 트레이드) =================
-def run_backtest():
-    dates = build_dates(CODES, START_DATE, END_DATE)
-    if not dates:
-        print("❌ 시세 데이터가 없습니다. 폴백 종목/기간을 확인하세요.")
-        sys.exit(0)
+# ─────────────────────────────────────────────
+# Day simulation (open→TP/SL→close)
+# ─────────────────────────────────────────────
+def simulate_day_open_tp_sl(open_px: float, high: float, low: float,
+                            sl_pct: float, tp_pct: float,
+                            priority: str = 'SL_FIRST', close_px: float | None = None) -> float:
+    tp_price = adjust_price_to_tick(int(open_px * (1+tp_pct)))
+    sl_price = adjust_price_to_tick(int(open_px * (1-sl_pct)))
 
-    capital = INITIAL_CASH
-    track_dates = []
-    capitals = []
+    hit_tp = high >= tp_price
+    hit_sl = low  <= sl_price
 
-    # 종목별 데이터 미리 적재(메모리)
-    prices = {code: fetch_daily_prices_range_cached(code, START_DATE, END_DATE) for code in CODES}
+    if hit_tp and hit_sl:
+        if priority.upper() == 'SL_FIRST':
+            return -sl_pct
+        elif priority.upper() == 'TP_FIRST':
+            return tp_pct
+        else:
+            return 0.5*(tp_pct - sl_pct)
+    if hit_tp:
+        return tp_pct
+    if hit_sl:
+        return -sl_pct
+    if close_px is None:
+        return 0.0
+    return (close_px / open_px) - 1.0
 
-    for d in dates:
-        # 해당 날짜에 시세가 존재하는 폴백 종목만 필터
-        tradables = []
-        for code in CODES:
-            df = prices[code]
-            if df.empty:
-                continue
-            row = df[df["date"] == d]
+# ─────────────────────────────────────────────
+# RANGE backtest (only)
+# ─────────────────────────────────────────────
+def run_backtest_range(start: str, end: str, codes: list[str]) -> pd.DataFrame:
+    data = {}
+    for c in codes:
+        df = load_daily_csv(c)
+        if df is None:
+            print(f"⚠️ CSV not found for {c}. Fetching...")
+            fetch_ohlcv_naver(c, FETCH_START_BUFFER, FETCH_END_BUFFER)
+            df = load_daily_csv(c)
+        if df is not None:
+            data[c] = df
+    codes = [c for c in codes if c in data]
+    if not codes:
+        raise SystemExit("No data available for selected codes.")
+
+    if DEBUG_SPAN:
+        for c, df in data.items():
+            print(f"  {c} span: {df['date'].min()} ~ {df['date'].max()}")
+
+    equity = INIT_EQUITY
+    curve = []
+    # pre-start anchor for plotting
+    curve.append({'date': (pd.to_datetime(start) - pd.Timedelta(days=1)).strftime('%Y-%m-%d'),
+                  'equity': int(equity)})
+
+    # build union of trading days in window
+    date_union = set()
+    for c in codes:
+        s = data[c]
+        m = (s['date'] >= start) & (s['date'] <= end)
+        date_union |= set(s.loc[m, 'date'].tolist())
+    trading_days = sorted(date_union)
+
+    for d in trading_days:
+        # rows for the day
+        day_rows = {}
+        for c in codes:
+            row = data[c][data[c]['date'] == d]
             if row.empty:
                 continue
-            o = float(row.iloc[0]["open"])
-            c = float(row.iloc[0]["close"])
-            tradables.append((code, o, c))
-
-        # 어떤 종목도 시세가 없으면 자본 그대로 유지
-        if not tradables:
-            track_dates.append(d)
-            capitals.append(capital)
+            day_rows[c] = row.iloc[0]
+        if not day_rows:
             continue
 
-        invest_total = capital * INVEST_FRACTION_PER_DAY
-        per_stock = invest_total / len(tradables)
-
-        day_pnl = 0.0
-        for code, o, c in tradables:
-            if o <= 0:
+        # Kelly selection
+        klist = []
+        for c in list(day_rows.keys()):
+            p = compute_p_from_history(data[c], d)
+            f = kelly_fraction(p, R)
+            if f <= 0:
+                del day_rows[c]
                 continue
-            qty = per_stock / o
-            # 수수료/세금 반영: 시가 매수 비용(+수수료), 종가 매도 수익(-수수료, -세금)
-            buy_cost = o * qty * (1 + FEE_RATE)
-            sell_rev = c * qty * (1 - FEE_RATE)
-            sell_rev *= (1 - TAX_RATE_SELL)
-            day_pnl += (sell_rev - buy_cost)
-        capital += day_pnl
+            klist.append({'code': c, 'p': p, 'f': f})
 
-        track_dates.append(d)
-        capitals.append(capital)
+        if not klist:
+            curve.append({'date': d, 'equity': int(equity)})
+            continue
 
-    return track_dates, capitals
+        # allocate
+        budget = equity * EQUITY_UTILIZATION
+        sum_f = sum(x['f'] for x in klist)
+        used = 0.0
+        alloc = {}
+        for x in sorted(klist, key=lambda z: z['f'], reverse=True):
+            tgt = budget * (x['f'] / sum_f)
+            cap = budget * PER_STOCK_CAP_PCT
+            tgt = min(tgt, cap)
+            remain = budget - used
+            if remain <= 0:
+                qty = 0
+            else:
+                tgt = min(tgt, remain)
+                o = float(day_rows[x['code']]['open'])
+                qty = 0 if tgt < MIN_ORDER_VALUE else int(tgt // o)
+            alloc[x['code']] = qty
+            used += qty * float(day_rows[x['code']]['open'])
 
-# ================= 실행 & 저장 =================
+        # simulate
+        day_pnl = 0.0
+        for c, qty in alloc.items():
+            if qty <= 0:
+                continue
+            r = day_rows[c]
+            o, h, l, cl = float(r['open']), float(r['high']), float(r['low']), float(r['close'])
+            rc = simulate_day_open_tp_sl(o, h, l, STOP_LOSS_PCT, TAKE_PROFIT_PCT, TRIGGER_PRIORITY, close_px=cl)
+            pos_value = qty * o
+            day_pnl += pos_value * rc
+        equity += day_pnl
+        curve.append({'date': d, 'equity': int(equity)})
+
+    return pd.DataFrame(curve)
+
+# ─────────────────────────────────────────────
+# ENTRYPOINT
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    dates, capitals = run_backtest()
+    # 1) Universe
+    def pick_universe():
+        if USE_RANDOM_UNIVERSE:
+            pool = RANDOM_UNIVERSE_POOL or []
+            if not pool:
+                pool = ["005930","000660","035720"]
+            rng = random.Random(RANDOM_SEED)
+            n = min(rng.randint(RANDOM_MIN_CODES, RANDOM_MAX_CODES), len(pool))
+            return sorted(rng.sample(pool, n))
+        if not os.path.exists(BUYLIST_PATH):
+            return ["000660","005930","012330","051910","207940"]
+        df = pd.read_csv(BUYLIST_PATH, dtype={'종목코드': str, 'code': str})
+        codes = []
+        for _, row in df.iterrows():
+            code = (row.get('종목코드') or row.get('code') or '').zfill(6)
+            if code:
+                codes.append(code)
+        codes = sorted(list(dict.fromkeys(codes)))
+        if not codes:
+            return ["000660","005930","012330","051910","207940"]
+        return codes
 
-    outdir = Path(OUTPUT_DIR)
-    outdir.mkdir(parents=True, exist_ok=True)
+    codes = pick_universe()
+    print("Universe:", codes)
 
-    # CSV 저장
-    out_csv = outdir / f"equity_curve_fallback6_{START_DATE}_{END_DATE}.csv"
-    pd.DataFrame({"date": dates, "capital": capitals}).to_csv(out_csv, index=False, encoding="utf-8-sig")
+    # 2) Ensure OHLCV exists/covered
+    codes = ensure_ohlcv_for(codes, start=START_DATE, end=END_DATE)
+    if not codes:
+        print("⚠️ No codes available after fetch.")
+        sys.exit(0)
 
-    # 그래프 저장
-    plt.figure(figsize=(12,6))
-    plt.plot(pd.to_datetime(dates), capitals)
-    plt.title(f"Equity Curve — Fallback 6 (Open->Close) {START_DATE}~{END_DATE}")
-    plt.xlabel("Date"); plt.ylabel("Capital (KRW)")
-    plt.grid(True); plt.tight_layout()
-    out_png = outdir / f"equity_curve_fallback6_{START_DATE}_{END_DATE}.png"
-    plt.savefig(out_png, dpi=180)
+    # 3) Run RANGE backtest
+    df_curve = run_backtest_range(START_DATE, END_DATE, codes)
+    if df_curve.empty:
+        print("⚠️ No trading days or data in the selected window.")
+        sys.exit(0)
 
-    print(f"✅ 저장 완료: {out_csv}")
-    print(f"✅ 저장 완료: {out_png}")
+    # 4) Save equity curve & line chart (Return % vs INIT_EQUITY)
+    out_csv = Path(OUTPUT_DIR) / f"kelly_backtest_{START_DATE}_{END_DATE}.csv"
+    out_png = Path(OUTPUT_DIR) / f"kelly_backtest_{START_DATE}_{END_DATE}.png"
+    df_curve.to_csv(out_csv, index=False, encoding='utf-8-sig')
+
+    base = float(INIT_EQUITY)
+    ret_series = (df_curve['equity'].astype(float) / base - 1.0) * 100.0
+
+    plt.rcParams['axes.unicode_minus'] = False
+    plt.figure(figsize=(10,6))
+    plt.plot(df_curve['date'].tolist(), ret_series.tolist(), label='Return (%)')
+    plt.xticks(rotation=45)
+    plt.title(f"Kelly Backtest {START_DATE}~{END_DATE}")
+    plt.xlabel("Date"); plt.ylabel("Return (%)")
+    plt.grid(True); plt.legend(); plt.tight_layout()
+    plt.savefig(out_png, dpi=300)
+
+    total_ret = (df_curve['equity'].iloc[-1] / base - 1.0) * 100.0
+    print(f"Final Return: {total_ret:.2f}% from {START_DATE} to {END_DATE}")
+    print(f"✅ Saved: {out_csv}")
+    print(f"✅ Saved: {out_png}")
