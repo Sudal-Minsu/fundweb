@@ -70,7 +70,7 @@ SELL_NON_CANDIDATES      = True
 CHECK_TP_SL_EVERY_LOOP   = True
 
 # 실주문 방지 스위치 (기본 ON: 주문을 보내지 않음)
-DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
+DRY_RUN = os.environ.get("DRY_RUN", "1") == "0"
 
 # 모의투자 베이스 URL (실계에서는 실서버로 바꾸세요)
 url_base = "https://openapivts.koreainvestment.com:29443"

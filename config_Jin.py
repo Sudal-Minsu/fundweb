@@ -12,8 +12,8 @@ DB_CONFIG = {
 }
 
 
-keyring.set_password('mock_app_key', '진상원', 'PSvNMEEXvFUo3DRIpE4L3bYOoV7JKDda3Y5Y')
-keyring.set_password('mock_app_secret', '진상원', 'NB7Vh7GDYaIyAmOqO7xSLz/HapmFZ16XMG5+trpXH14d4j2BI1+56nC2Nde8kxTTB1QU1bHxnXOoryYzt/2X1bOmWj3I0EZvUhdJi1TvxUAN3YE5fSDhUDWatUvU8khlp9funqeysPsSTwnGTndYT1l0o+kPeQAlehp2qj+uCocSO/GfF5w=')
+keyring.set_password('mock_app_key', '진상원', 'PSPBOlZt804x1wymlTA9MlxDLXCqlCuOn6Fd')
+keyring.set_password('mock_app_secret', '진상원', 'vOsDQtJnKV9FdnFLnpKSbOMaMNqR+N3kUM+ncfnKNxF9/Lv2c68ZwJoZIcfoXSnGWXFPC/+hOa1hAhFe9Jji+mLrM3GTdExEoOUejj3zN4vWuam2gVutBxcZoYvgKuP1NX1SEesbPkLng2ftdXZ8VHG1L3mBQj+XJl/qxjo+pEAz9dnnAdg=')
 
 
 def get_api_keys():
@@ -24,6 +24,6 @@ def get_api_keys():
 
 # 계좌 정보 저장
 ACCOUNT_INFO = {
-    "CANO": "50141972",  # 계좌번호 앞 8자리
+    "CANO": "50157248",  # 계좌번호 앞 8자리
     "ACNT_PRDT_CD": "01"  # 계좌번호 뒤 2자리
 }
